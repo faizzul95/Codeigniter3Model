@@ -21,24 +21,10 @@ Add this line in `composer.json` before install or update.
 ```bash
 "scripts": {
     "post-install-cmd": [
-        "@php -r \"@mkdir('application/core/Traits', 0755, true);\"",
-        "@php -r \"@mkdir('application/language/malay', 0755, true);\"",
-        "@php -r \"copy('vendor/onlyphp/codeigniter3-model/src/core/MY_Model.php', 'application/core/MY_Model.php');\"",
-        "@php -r \"copy('vendor/onlyphp/codeigniter3-model/src/core/Traits/EagerQuery.php', 'application/core/Traits/EagerQuery.php');\"",
-        "@php -r \"copy('vendor/onlyphp/codeigniter3-model/src/core/Traits/PaginateQuery.php', 'application/core/Traits/PaginateQuery.php');\"",
-        "@php -r \"copy('vendor/onlyphp/codeigniter3-model/src/core/language/malay/form_validation_lang.php', 'application/language/malay/form_validation_lang.php');\"",
-        "@php -r \"$json = json_decode(file_get_contents('composer.json'), true); $json['autoload']['psr-4']['App\\\\'] = 'application/'; $json['config']['process-timeout'] = 3000; file_put_contents('composer.json', json_encode($json, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));\"",
-        "@composer dump-autoload"
+        "@php vendor/onlyphp/codeigniter3-model/scripts/install.php"
     ],
     "post-update-cmd": [
-        "@php -r \"@mkdir('application/core/Traits', 0755, true);\"",
-        "@php -r \"@mkdir('application/language/malay', 0755, true);\"",
-        "@php -r \"copy('vendor/onlyphp/codeigniter3-model/src/core/MY_Model.php', 'application/core/MY_Model.php');\"",
-        "@php -r \"copy('vendor/onlyphp/codeigniter3-model/src/core/Traits/EagerQuery.php', 'application/core/Traits/EagerQuery.php');\"",
-        "@php -r \"copy('vendor/onlyphp/codeigniter3-model/src/core/Traits/PaginateQuery.php', 'application/core/Traits/PaginateQuery.php');\"",
-        "@php -r \"copy('vendor/onlyphp/codeigniter3-model/src/language/malay/form_validation_lang.php', 'application/language/malay/form_validation_lang.php');\"",
-        "@php -r \"$json = json_decode(file_get_contents('composer.json'), true); $json['autoload']['psr-4']['App\\\\'] = 'application/'; $json['config']['process-timeout'] = 3000; file_put_contents('composer.json', json_encode($json, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES));\"",
-        "@composer dump-autoload"
+        "@php vendor/onlyphp/codeigniter3-model/scripts/update.php"
     ]
 }
 ```
