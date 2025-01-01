@@ -8,7 +8,7 @@
 copy('vendor/onlyphp/codeigniter3-model/src/core/MY_Model.php', 'application/core/MY_Model.php');
 copy('vendor/onlyphp/codeigniter3-model/src/core/Traits/EagerQuery.php', 'application/core/Traits/EagerQuery.php');
 copy('vendor/onlyphp/codeigniter3-model/src/core/Traits/PaginateQuery.php', 'application/core/Traits/PaginateQuery.php');
-copy('vendor/onlyphp/codeigniter3-model/src/core/language/malay/form_validation_lang.php', 'application/language/malay/form_validation_lang.php');
+copy('vendor/onlyphp/codeigniter3-model/src/language/malay/form_validation_lang.php', 'application/language/malay/form_validation_lang.php');
 
 // Update composer.json
 $jsonFile = 'composer.json';
