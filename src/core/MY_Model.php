@@ -1824,10 +1824,6 @@ class MY_Model extends CI_Model
         if (!is_numeric($value) || strlen((string) $value) !== 4) {
             throw new \InvalidArgumentException('Invalid year. Must be a four-digit number.');
         }
-
-        if ($value < 1900 || $value > date('Y')) {
-            throw new InvalidArgumentException("Invalid year: $value");
-        }
     }
 
     protected function validateInteger($value, $type, $positive = true)
