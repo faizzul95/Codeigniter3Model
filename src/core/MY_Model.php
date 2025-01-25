@@ -112,15 +112,26 @@ class MY_Model extends CI_Model
      */
     public function select($columns = '*')
     {
-        // Handle ambiguous column names (e.g., id, created_at, updated_at) by prefixing with table name
+        // Supported aggregate functions
+        $aggregateFunctions = '/\b(SUM|MAX|MIN|AVG|DISTINCT|COUNT|GROUP_CONCAT|STDDEV|VARIANCE|FIRST|LAST|BIT_AND|BIT_OR|BIT_XOR|JSON_ARRAYAGG|JSON_OBJECTAGG|GROUPING|CHECKSUM_AGG|MEDIAN|PERCENTILE_CONT|PERCENTILE_DISC|CUME_DIST|DENSE_RANK|RANK|ROW_NUMBER|NTILE|MODE|STDEV|STDEVP|VAR|VARP|COLLECT_SET|COLLECT_LIST|APPROX_COUNT_DISTINCT|LISTAGG|CORR|COVAR_POP|COVAR_SAMP|REGR_SLOPE|REGR_INTERCEPT|REGR_COUNT|REGR_R2|REGR_AVGX|REGR_AVGY)\b/i';
+
+        // Handle column selection
         if (is_array($columns)) {
-            $columns = array_map(function ($column) {
-                return strpos($column, '.') === false ? "{$this->table}.$column" : $column;
+            $columns = array_map(function ($column) use ($aggregateFunctions) {
+                // Skip prefixing for aggregate functions and columns with table prefix
+                if (preg_match($aggregateFunctions, strtoupper($column)) || strpos($column, '.') !== false) {
+                    return $column;
+                }
+                return "{$this->table}.$column";
             }, $columns);
             $columns = implode(',', $columns);
         } else if ($columns !== '*') {
-            $columns = implode(',', array_map(function ($column) {
-                return strpos($column, '.') === false ? "{$this->table}.$column" : $column;
+            $columns = implode(',', array_map(function ($column) use ($aggregateFunctions) {
+                // Skip prefixing for aggregate functions and columns with table prefix
+                if (preg_match($aggregateFunctions, strtoupper($column)) || strpos($column, '.') !== false) {
+                    return $column;
+                }
+                return "{$this->table}.$column";
             }, explode(',', $columns)));
         } else {
             $columns = $this->table . '.*';
