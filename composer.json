@@ -1,6 +1,6 @@
 {
     "name": "onlyphp/codeigniter3-model",
-    "version": "1.0.4",
+    "version": "1.0.5",
     "description": "Advanced model class for CodeIgniter 3 with eager loading and pagination capabilities",
     "type": "library",
     "license": "MIT",

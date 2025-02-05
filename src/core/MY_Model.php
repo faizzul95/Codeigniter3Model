@@ -612,7 +612,9 @@ class MY_Model extends CI_Model
     public function toSql()
     {
         $this->_withTrashQueryFilter();
-        $query = $this->_database->get_compiled_select($this->table, false);
+        $this->_applyAggregates();
+
+        $query = $this->_database->get_compiled_select($this->table);
         $this->resetQuery();
         return $query;
     }
@@ -691,10 +693,13 @@ class MY_Model extends CI_Model
     {
         try {
             $this->_withTrashQueryFilter();
+            $this->_applyAggregates();
+
             $result = $this->_database->get($this->table)->result_array();
 
-            if (!empty($result))
+            if (!empty($result)) {
                 $result = $this->loadRelations($result);
+            }
 
             $formattedResult = $this->formatResult($result);
             $this->resetQuery();
@@ -713,12 +718,14 @@ class MY_Model extends CI_Model
     public function fetch()
     {
         try {
-
             $this->_withTrashQueryFilter();
+            $this->_applyAggregates();
+
             $result = $this->_database->get($this->table)->row_array();
 
-            if (!empty($result))
+            if (!empty($result)) {
                 $result = $this->loadRelations([$result]);
+            }
 
             $formattedResult = $this->formatResult($result[0] ?? NULL);
             $this->resetQuery();
@@ -1927,6 +1934,7 @@ class MY_Model extends CI_Model
         $this->primaryKey = 'id';
         $this->relations = [];
         $this->eagerLoad = [];
+        $this->aggregateRelations = [];
         $this->returnType = 'array';
         $this->_paginateColumn = [];
     }

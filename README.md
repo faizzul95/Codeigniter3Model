@@ -469,9 +469,17 @@ For bugs and feature requests, please use the [GitHub Issues](https://github.com
 
 #### Eager Load Functions
 
-| Function   | Description                                                                                                                                      |
-|------------|--------------------------------------------------------------------------------------------------------------------------------------------------|
-| `with()`   | Eager loads related models to avoid the N+1 query issue. Similar to Laravel's `with()`.                                                          |
+| Function      | Description                                                       |
+|---------------|-----------------------------------------------------------------------------------------------------------------------------------------------|
+| `with()`      | Eager loads related models to prevent N+1 query performance issues. Similar to Laravel's `with()`.                                            |
+| `withCount()` | Adds a count of related models as an additional attribute.                                                                                    |
+| `withSum()`   | Calculates the sum of a specific column from related models.                                                                                  |
+| `withMax()`   | Retrieves the maximum value of a specific column from related models.                                                                         |
+| `withMin()`   | Retrieves the minimum value of a specific column from related models.                                                                         |
+| `whereHas()`          | Filters models based on the existence of a related model that meets a specific condition.                                             |
+| `orWhereHas()`        | Adds an OR condition to filter models based on the existence of a related model that meets a specific condition.                      |
+| `whereDoesntHave()`   | Filters models that do not have any related models matching a specific condition.                                                     |
+| `orWhereDoesntHave()` | Adds an OR condition to filter models that do not have any related models matching a specific condition.                              |
 
 <hr>
 
@@ -481,7 +489,7 @@ For bugs and feature requests, please use the [GitHub Issues](https://github.com
 |--------------------|--------------------------------------------------------------------------------------------------------------------------------------------------|
 | `create()`         | Inserts a single new record in the database based on the provided data (will return the last inserted id).                                       |
 | `batchCreate()`    | Inserts a multiple new record in the database based on the provided data in one operation.                                                       |
-| `patch()`          | Updates a specific record by its primary key (ID) set at `$primaryKey` property in model.                                                          |
+| `patch()`          | Updates a specific record by its primary key (ID) set at `$primaryKey` property in model.                                                        |
 | `patchAll()`       | Updates multiple existing records based on specified conditions in one operation.                                                                |
 | `batchPatch()`     | Updates a multiple existing record by using specific column/primarykey (does not required any where condition).                                  |
 | `destroy()`        | Deletes a specific record by its primary key (ID) set at the `$primaryKey` property in the model. If soft delete is enabled ($softDelete = true), the record is not permanently removed but flagged as deleted by setting a `deleted_at` or `$_deleted_at_field` property to timestamp. |
