@@ -567,15 +567,19 @@ class MY_Model extends CI_Model
         $originalState = $this->_cloneDatabaseSettings();
 
         while (true) {
-            // Restore the original query state
+            // Restore the original query conditions by cloning
+            $this->_database = clone $originalState['db'];
+
+            // Restore the original model state
             $this->connection = $originalState['connection'];
             $this->table = $originalState['table'];
             $this->primaryKey = $originalState['primaryKey'];
-            $this->relations = $originalState['relations'];
-            $this->eagerLoad = $originalState['eagerLoad'];
+            $this->relations = $originalState['relations'] ?? [];
+            $this->eagerLoad = $originalState['eagerLoad'] ?? [];
             $this->returnType = $originalState['returnType'];
+            $this->_paginateColumn = $originalState['_paginateColumn'] ?? [];
 
-            // Apply limit and offset
+            // Apply limit and offset for the current chunk
             $this->limit($size)->offset($offset);
 
             // Get results 
