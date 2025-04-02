@@ -393,7 +393,7 @@ trait EagerQuery
         try {
             if (count($relations) == 1) {
                 $currentRelation = $relations[0];
-                $relatedInstance = $currentInstance;
+                $relatedInstance = clone $currentInstance;
             } else {
                 $newInstance = new $currentInstance;
                 $setNewRelations = $newInstance->{$relations[0]}();
@@ -402,7 +402,7 @@ trait EagerQuery
                 if (!$this->load->is_model_loaded($model))
                     $this->load->model($model);
 
-                $relatedInstance = $this->{$model};
+                $relatedInstance = clone $this->{$model};
                 $currentRelation = $relations[1];
             }
 
@@ -453,12 +453,15 @@ trait EagerQuery
     {
         $chunks = array_chunk($values, $chunkSize);
         $result = [];
-
+        
+        $temp_model = clone $model;
         foreach ($chunks as $chunk) {
+            $mod = clone $temp_model;
             $chunkResult = count($chunk) == 1
-                ? $model->where($column, $chunk[0])->get()
-                : $model->whereIn($column, $chunk)->get();
+                ? $mod->where($column, $chunk[0])->get()
+                : $mod->whereIn($column, $chunk)->get();
 
+            unset($mod);
             $result = array_merge($result, $chunkResult);
         }
 

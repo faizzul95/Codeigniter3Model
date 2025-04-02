@@ -83,6 +83,7 @@ class MY_Model extends CI_Model
     protected $_ignoreValidation = false; // will ignore the validation
     protected $_validationError = []; // used to store the validation error message
     public $_validationLang = 'english'; // used to set validation language for error message, default is english
+    public $debug = false; // used to set debug mode
 
     public function __construct()
     {
@@ -1818,6 +1819,12 @@ class MY_Model extends CI_Model
         $query = $this->_database->from($this->table);
         $callback($query);
         return $query->get_compiled_select();
+    }
+
+    public function onDebug()
+    {
+        $this->debug = true;
+        return $this;
     }
 
     /**
