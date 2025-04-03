@@ -565,6 +565,146 @@ class MY_Model extends CI_Model
         return $this;
     }
 
+    /**
+     * Sorts the collection by a given key
+     * Similar to Laravel's sortBy method
+     * Supports dot notation for accessing relationship values
+     * 
+     * @param string $key The key to sort by (supports dot notation)
+     * @param int $direction SORT_ASC or SORT_DESC
+     * @param int $sortFlags The sort flags (PHP sort flags)
+     * @return array Sorted results
+     */
+    public function sortBy($key, $direction = SORT_ASC, $sortFlags = SORT_REGULAR)
+    {
+        try {
+            if (empty($key)) {
+                throw new Exception('The key is required.');
+            }
+
+            $results = $this->get();
+            
+            if (empty($results)) {
+                return $results;
+            }
+            
+            // Extract sort values
+            $sortValues = [];
+            foreach ($results as $index => $item) {
+                $sortValues[$index] = $this->_getValueUsingDotNotation($item, $key);
+            }
+            
+            // Sort the array
+            if ($direction === SORT_ASC) {
+                asort($sortValues, $sortFlags);
+            } else {
+                arsort($sortValues, $sortFlags);
+            }
+            
+            // Reorder the results based on the sorted keys
+            $sortedResults = [];
+            foreach (array_keys($sortValues) as $index) {
+                $sortedResults[] = $results[$index];
+            }
+            
+            return $sortedResults;
+
+        } catch (Exception $e) {
+            if ($this->debug) log_message('error', 'sortBy error: ' . $e->getMessage());
+            throw $e; // Re-throw the exception after cleanup
+        }
+    }
+
+    public function isEmpty()
+    {
+        $this->relations = [];
+        $this->eagerLoad = [];
+        $this->aggregateRelations = [];
+
+        return empty($this->get());
+    }
+
+    public function isNotEmpty()
+    {
+        return !$this->isEmpty();
+    }
+
+    /**
+     * Filters the results using a callback
+     * Similar to Laravel's filter() method
+     * 
+     * @param callable $callback The callback to filter results
+     * @return array Filtered results
+     */
+    public function filter(callable $callback)
+    {
+        $results = $this->get();
+        $filtered = [];
+        
+        foreach ($results as $key => $value) {
+            if (call_user_func($callback, $value, $key)) {
+                $filtered[$key] = $value;
+            }
+        }
+        
+        return array_values($filtered);
+    }
+
+    /**
+     * Creates a lazy collection that loads results in chunks
+     * Similar to Laravel's lazy() method
+     * 
+     * @param int $chunkSize Size of chunks to load
+     * @return Generator A generator that yields results
+     */
+    public function lazy($chunkSize = 1000)
+    {
+        // Store the original query state
+        $originalState = $this->_cloneDatabaseSettings();
+        $offset = 0;
+        
+        while (true) {
+            // Restore the original query conditions
+            $this->_database = clone $originalState['db'];
+            
+            // Restore model state
+            $this->connection = $originalState['connection'];
+            $this->table = $originalState['table'];
+            $this->primaryKey = $originalState['primaryKey'];
+            $this->relations = $originalState['relations'] ?? [];
+            $this->eagerLoad = $originalState['eagerLoad'] ?? [];
+            $this->returnType = $originalState['returnType'];
+            $this->_paginateColumn = $originalState['_paginateColumn'] ?? [];
+            
+            // Apply limit and offset for the current chunk
+            $this->limit($chunkSize)->offset($offset);
+            
+            // Get results
+            $results = $this->get();
+            
+            if (empty($results)) {
+                break;
+            }
+            
+            // Yield each result individually
+            foreach ($results as $result) {
+                yield $result;
+            }
+            
+            $offset += $chunkSize;
+            
+            // Clear the results to free memory
+            unset($results);
+            
+            if (function_exists('gc_collect_cycles')) {
+                gc_collect_cycles();
+            }
+        }
+        
+        // Reset internal properties for next query
+        $this->resetQuery();
+    }
+
     public function chunk($size, callable $callback)
     {
         $offset = 0;
@@ -696,6 +836,105 @@ class MY_Model extends CI_Model
 
         $this->resetQuery();
         return $query;
+    }
+
+    /**
+     * Get an array of a single column's values from the results
+     * Similar to Laravel's pluck() method
+     * Supports dot notation for accessing relationship values
+     * 
+     * @param string $column The column to retrieve values from (supports dot notation)
+     * @param string|null $key Optional key column to use as array keys (supports dot notation)
+     * @return array An array of values or key-value pairs
+     */
+    public function pluck($column, $key = null)
+    {   
+        try {
+            if (empty($column)) {
+                throw new Exception('The column key is required.');
+            }
+
+            $columnSelect = $key !== null ? "$key, $column" : $column;
+
+            $this->select($columnSelect);
+            $results = $this->get();
+            $values = [];
+
+            if (empty($results)) {
+                return $values;
+            }
+            
+            foreach ($results as $result) {
+                // Get column value, supporting dot notation for relations
+                $columnValue = $this->_getValueUsingDotNotation($result, $column);
+                
+                if ($columnValue !== null) {
+                    if ($key !== null) {
+                        // Get key value, supporting dot notation for relations
+                        $keyValue = $this->_getValueUsingDotNotation($result, $key);
+                        
+                        if ($keyValue !== null) {
+                            $values[$keyValue] = $columnValue;
+                        } else {
+                            $values[] = $columnValue;
+                        }
+                    } else {
+                        $values[] = $columnValue;
+                    }
+                }
+            }
+            
+            return $values;
+
+        } catch (Exception $e) {
+            if ($this->debug) log_message('error', 'Pluck error: ' . $e->getMessage());
+            throw $e; // Re-throw the exception after cleanup
+        }
+    }
+
+    /**
+     * Searches the collection for a given value
+     * Similar to Laravel's contains() method
+     * Supports dot notation for accessing relationship values
+     * 
+     * @param string|callable $key Column or callback
+     * @param mixed $value Value to search for (optional if $key is callable)
+     * @return bool True if found
+     */
+    public function contains($key, $value = null)
+    {
+        try {
+            if (empty($key)) {
+                throw new Exception('The key is required.');
+            }
+
+            $results = $this->get();
+
+            if (empty($results)) {
+                return false;
+            }
+            
+            if (is_callable($key)) {
+                foreach ($results as $k => $item) {
+                    if (call_user_func($key, $item, $k)) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+            
+            foreach ($results as $item) {
+                $itemValue = $this->_getValueUsingDotNotation($item, $key);
+                if ($itemValue == $value) {
+                    return true;
+                }
+            }
+            
+            return false;
+        } catch (Exception $e) {
+            if ($this->debug) log_message('error', 'contains error: ' . $e->getMessage());
+            throw $e; // Re-throw the exception after cleanup
+        }
     }
 
     /**
@@ -938,18 +1177,17 @@ class MY_Model extends CI_Model
             $data = array_merge($conditions, $values);
 
             // Check if a record exists with the given attributes
-            $existingRecord = get_instance()->db->from($this->table)->where($conditions)->get()->row_array();
+            $existingRecord = get_instance()->db->select($this->primaryKey)->from($this->table)->where($conditions)->limit(1)->get()->row_array();
 
-            if ($existingRecord) {
+            if (!empty($existingRecord)) {
                 // If record exists, update it
-                $id = $existingRecord[$this->primaryKey];
-                return $this->patch($data, $id);
-            } else {
-                // If record doesn't exist, create it
-                return $this->create($data);
+                return $this->patch($data, $existingRecord[$this->primaryKey]);
             }
+
+            // If record doesn't exist, create it
+            return $this->create($data);
         } catch (Exception $e) {
-            log_message('error', 'insertOrUpdate error: ' . $e->getMessage());
+            if ($this->debug) log_message('error', 'insertOrUpdate error: ' . $e->getMessage());
             return [
                 'code' => 422,
                 'error' => $e->getMessage(),
@@ -1007,7 +1245,7 @@ class MY_Model extends CI_Model
                 return $this->_validationError;
             }
         } catch (Exception $e) {
-            log_message('error', 'Create error: ' . $e->getMessage());
+            if ($this->debug) log_message('error', 'Create error: ' . $e->getMessage());
             return [
                 'code' => 500,
                 'error' => $e->getMessage(),
@@ -1079,7 +1317,7 @@ class MY_Model extends CI_Model
             ];
         } catch (Exception $e) {
             $this->_database->trans_rollback();
-            log_message('error', "Batch creation error in table {$this->table}: " . $e->getMessage());
+            if ($this->debug) log_message('error', "Batch creation error in table {$this->table}: " . $e->getMessage());
             return [
                 'code' => 422,
                 'error' => $e->getMessage(),
@@ -1140,7 +1378,7 @@ class MY_Model extends CI_Model
                 return $this->_validationError;
             }
         } catch (Exception $e) {
-            log_message('error', "Update error for id ({$id}) in table {$this->table}: "  . $e->getMessage());
+            if ($this->debug) log_message('error', "Update error for id ({$id}) in table {$this->table}: "  . $e->getMessage());
             return [
                 'code' => 422,
                 'error' => $e->getMessage(),
@@ -1173,7 +1411,7 @@ class MY_Model extends CI_Model
 
             return $this->batchPatch($updateData, $this->primaryKey);
         } catch (Exception $e) {
-            log_message('error', "Update error for patchAll: "  . $e->getMessage());
+            if ($this->debug) log_message('error', "Update error for patchAll: "  . $e->getMessage());
             return [
                 'code' => 422,
                 'error' => $e->getMessage(),
@@ -1251,7 +1489,7 @@ class MY_Model extends CI_Model
             ];
         } catch (Exception $e) {
             $this->_database->trans_rollback(); // Rollback the transaction
-            log_message('error', "Batch update error in table {$this->table}: " . $e->getMessage());
+            if ($this->debug) log_message('error', "Batch update error in table {$this->table}: " . $e->getMessage());
             return [
                 'code' => 422,
                 'error' => $e->getMessage(),
@@ -1305,7 +1543,7 @@ class MY_Model extends CI_Model
                 'action' => 'delete'
             ];
         } catch (Exception $e) {
-            log_message('error', "Delete error for id ({$id}) in table {$this->table}: " . $e->getMessage());
+            if ($this->debug) log_message('error', "Delete error for id ({$id}) in table {$this->table}: " . $e->getMessage());
             return [
                 'code' => 422,
                 'error' => $e->getMessage(),
@@ -1324,9 +1562,7 @@ class MY_Model extends CI_Model
     {
         try {
 
-            $temp = clone $this->_database;
-            $data = $this->withTrashed()->get();
-            $this->_database = $temp;
+            $data = (clone $this->_database)->withTrashed()->get();
 
             if (!$data) {
                 throw new Exception('Records not found');
@@ -1353,7 +1589,7 @@ class MY_Model extends CI_Model
                 'action' => 'delete'
             ];
         } catch (Exception $e) {
-            log_message('error', "Delete error for multi data in table {$this->table}: " . $e->getMessage());
+            if ($this->debug) log_message('error', "Delete error for multi data in table {$this->table}: " . $e->getMessage());
             return [
                 'code' => 422,
                 'error' => $e->getMessage(),
@@ -1394,7 +1630,7 @@ class MY_Model extends CI_Model
                 'action' => 'delete',
             ];
         } catch (Exception $e) {
-            log_message('error', 'Force Delete Error: ' . $e->getMessage());
+            if ($this->debug) log_message('error', 'Force Delete Error: ' . $e->getMessage());
             return [
                 'code' => 422,
                 'error' => $e->getMessage(),
@@ -1435,7 +1671,7 @@ class MY_Model extends CI_Model
                 'action' => 'restore',
             ];
         } catch (Exception $e) {
-            log_message('error', 'Restore Error: ' . $e->getMessage());
+            if ($this->debug) log_message('error', 'Restore Error: ' . $e->getMessage());
             return [
                 'code' => 422,
                 'error' => $e->getMessage(),
@@ -1542,7 +1778,7 @@ class MY_Model extends CI_Model
                         }
                         $errorsList .= "</ul>";
 
-                        log_message('error', ucfirst($action) . ' Validation Error: ' . $errorsList);
+                        if ($this->debug) log_message('error', ucfirst($action) . ' Validation Error: ' . $errorsList);
                         $this->_validationError = [
                             'code' => 422,
                             'data' => $data,
@@ -1821,9 +2057,13 @@ class MY_Model extends CI_Model
         return $query->get_compiled_select();
     }
 
-    public function onDebug()
+    public function onDebug($level = E_ALL)
     {
         $this->debug = true;
+    
+        ini_set('display_errors', 1);
+        ini_set('display_startup_errors', 1); 
+        error_reporting($level);
         return $this;
     }
 
@@ -1921,6 +2161,36 @@ class MY_Model extends CI_Model
         }
 
         return false;
+    }
+
+    /**
+     * Helper method to get value using dot notation
+     * e.g., 'user.profile.name' will get $result['user']['profile']['name']
+     * 
+     * @param array $array The array to search in
+     * @param string $key The key with dot notation
+     * @return mixed|null The value or null if not found
+     */
+    protected function _getValueUsingDotNotation($array, $key)
+    {
+        // Check if we have dot notation
+        if (strpos($key, '.') === false) {
+            return $array[$key] ?? null;
+        }
+        
+        // Split the key by dot
+        $keys = explode('.', $key);
+        $value = $array;
+        
+        // Navigate through the nested array
+        foreach ($keys as $nestedKey) {
+            if (!is_array($value) || !isset($value[$nestedKey])) {
+                return null;
+            }
+            $value = $value[$nestedKey];
+        }
+        
+        return $value;
     }
 
     # FORMAT RESPONSE HELPER

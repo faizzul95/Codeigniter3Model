@@ -355,6 +355,90 @@ $this->user_model->chunk(100, function($users) {
         // Process each user
     }
 });
+
+// ---------------
+// PLUCK EXAMPLES
+// ---------------
+
+// Example 1: Get all usernames as a simple array
+$usernames = $this->user_model->pluck('username');
+// Result: ['john_doe', 'jane_smith', 'bob_jones', ...]
+
+// Example 2: Get usernames keyed by user ID
+$usernamesById = $this->user_model->pluck('username', 'id');
+// Result: [1 => 'john_doe', 2 => 'jane_smith', 3 => 'bob_jones', ...]
+
+// Example 3: Get values from related models using dot notation
+$this->user_model->with('profile');
+$userCities = $this->user_model->pluck('profile.city');
+// Result: ['New York', 'Los Angeles', 'Chicago', ...]
+
+// Example 4: Get values from related models with custom keys
+$this->user_model->with(['profile', 'role']);
+$userCitiesByRole = $this->user_model->pluck('profile.city', 'role.name');
+// Result: ['admin' => 'New York', 'editor' => 'Los Angeles', ...]
+
+// ---------------
+// LAZY EXAMPLES
+// ---------------
+
+// Example 1: Process large datasets without memory issues
+foreach ($this->order_model->lazy(500) as $order) {
+    // Process each order individually
+    processOrder($order);
+}
+
+// Example 2: Transform data with lazy loading
+$processedOrders = [];
+foreach ($this->order_model->where('status', 'processing')->lazy() as $order) {
+    $processedOrders[] = calculateTotals($order);
+}
+
+// ---------------
+// FILTER EXAMPLES
+// ---------------
+
+// Example 1: Filter active premium users
+$premiumUsers = $this->user_model->filter(function($user) {
+    return $user['subscription_type'] === 'premium' && $user['is_active'] === 1;
+});
+
+// ---------------
+// SORT BY EXAMPLES
+// ---------------
+
+// Example 1: Sort users by last login date
+$recentUsers = $this->user_model->sortBy('last_login_at', SORT_DESC);
+
+// Example 2: Sort products by relation field
+$productsByCategory = $this->product_model->with('category')->sortBy('category.priority');
+
+// ---------------
+// IS EMPTY / IS NOT EMPTY EXAMPLES
+// ---------------
+
+// Example 1: Check if there are any pending orders
+if ($this->order_model->where('status', 'pending')->isNotEmpty()) {
+    // Logic process
+}
+
+// Example 2: Show empty state for products
+if ($this->product_model->where('category_id', 5)->isEmpty()) {
+    // Logic process
+}
+
+// ---------------
+// CONTAINS EXAMPLES
+// ---------------
+
+// Example 1: Check if any premium users exist
+$hasPremiumUsers = $this->user_model->contains('subscription_type', 'premium');
+
+// Example 2: Check with callback
+$hasNewOrders = $this->order_model->contains(function($order) {
+    return strtotime($order['created_at']) > strtotime('-24 hours');
+});
+
 ```
 
 ## 📄 License
@@ -436,6 +520,13 @@ For bugs and feature requests, please use the [GitHub Issues](https://github.com
 | `having()`      | Adds a HAVING clause. Similar to Laravel's `having()`.                                                                                            |
 | `havingRaw()`   | Adds a raw HAVING clause. Similar to Laravel's `havingRaw()`.                                                                                     |
 | `chunk()`       | Process data in chunks to handle large datasets efficiently. Similar to Laravel's `chunk()`.                                                      |
+| `lazy()`        | Returns a lazy collection of results, loading items as needed to conserve memory. Similar to Laravel's `lazy()` method.                           | 
+| `filter()`      | Filters the collection using a callback function, keeping only items that pass the given truth test. Similar to Laravel's collection `filter()`.  | 
+| `pluck()`       | Retrieves all values for a given key from the collection. Similar to Laravel's collection `pluck()` method.                                       | 
+| `sortBy()`      | Sorts the collection by the given key. Similar to Laravel's collection `sortBy()` method.                                                         | 
+| `isEmpty()`     | Determines if the collection is empty. Returns true if the collection has no items. Similar to Laravel's collection `isEmpty()`.                  | 
+| `isNotEmpty()`  | Determines if the collection is not empty. Returns true if the collection has at least one item. Similar to Laravel's collection `isNotEmpty()`.  |
+| `contains()`    | Determines if the collection contains a given item or if a given key-value pair exists in the collection. Similar to Laravel's collection `contains()` method. |
 | `get()`         | Retrieves all data from the database based on the specified criteria.                                                                             |
 | `fetch()`       | Retrieves a single record from the database based on the specified criteria.                                                                      |
 | `first()`       | Retrieves the first record based on the query.                                                                                                    |

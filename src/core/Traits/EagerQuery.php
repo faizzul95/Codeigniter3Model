@@ -393,7 +393,7 @@ trait EagerQuery
         try {
             if (count($relations) == 1) {
                 $currentRelation = $relations[0];
-                $relatedInstance = clone $currentInstance;
+                $relatedInstance = $currentInstance;
             } else {
                 $newInstance = new $currentInstance;
                 $setNewRelations = $newInstance->{$relations[0]}();
@@ -402,7 +402,7 @@ trait EagerQuery
                 if (!$this->load->is_model_loaded($model))
                     $this->load->model($model);
 
-                $relatedInstance = clone $this->{$model};
+                $relatedInstance = $this->{$model};
                 $currentRelation = $relations[1];
             }
 
@@ -410,7 +410,7 @@ trait EagerQuery
                 throw new \Exception("Method {$currentRelation} does not exist in the model " . get_class($this));
             }
 
-            $configRelation = $relatedInstance->{$currentRelation}();
+            $configRelation = (clone $relatedInstance)->{$currentRelation}();
 
             if (isset($configRelation->relations)) {
                 foreach ($configRelation->relations as $modelName => $rels) {
@@ -451,18 +451,14 @@ trait EagerQuery
 
     private function _processQueryRelations($model, $column, $values, $chunkSize = 1000)
     {
-        $chunks = array_chunk($values, $chunkSize);
         $result = [];
         
-        $temp_model = clone $model;
-        foreach ($chunks as $chunk) {
-            $mod = clone $temp_model;
+        foreach (array_chunk($values, $chunkSize) as $chunk) {
             $chunkResult = count($chunk) == 1
-                ? $mod->where($column, $chunk[0])->get()
-                : $mod->whereIn($column, $chunk)->get();
+                ? (clone $model)->where($column, $chunk[0])->get()
+                : (clone $model)->whereIn($column, $chunk)->get();
 
-            unset($mod);
-            $result = array_merge($result, $chunkResult);
+            array_push($result, ...$chunkResult);
         }
 
         return $result;
@@ -541,13 +537,11 @@ trait EagerQuery
             return;
         }
 
-        $_tempCon = clone $this->_database;
         // Ensure the original table's columns are selected first
-        if (strpos($_tempCon->get_compiled_select('example_table', FALSE), 'SELECT *') !== false) {
+        if (strpos((clone $this->_database)->get_compiled_select('example_table', FALSE), 'SELECT *') !== false) {
             // If no columns are selected, apply the default selection
             $this->_database->select("{$this->table}.*");
         }
-        unset($_tempCon);
 
         // Prepare an array to store subqueries
         $subqueries = [];
