@@ -382,17 +382,188 @@ $userCitiesByRole = $this->user_model->pluck('profile.city', 'role.name');
 // LAZY EXAMPLES
 // ---------------
 
-// Example 1: Process large datasets without memory issues
-foreach ($this->order_model->lazy(500) as $order) {
-    // Process each order individually
-    processOrder($order);
+// Setup for examples
+$users = $this->User_model
+    ->where('status', 'active')
+    ->lazy(200);
+
+// Example 1: count() - Get the total number of items in the collection
+$totalUsers = $users->count();
+echo "Total active users: " . $totalUsers;
+// Note: count() iterates through the entire collection the first time
+// it's called, then caches the result for subsequent calls
+
+// Example 2: first() - Get the first item from the collection
+// Without callback
+$firstUser = $users->first();
+echo "First user ID: " . $firstUser['id'];
+
+// With callback to find specific item
+$adminUser = $users->first(function($user) {
+    return $user['role'] === 'admin';
+}, null);
+echo "First admin user: " . ($adminUser ? $adminUser['username'] : 'No admin found');
+
+// Example 3: pluck() - Extract a specific key from all items
+$usernames = $users->pluck('username');
+foreach ($usernames as $username) {
+    echo "Username: " . $username . "<br>";
 }
 
-// Example 2: Transform data with lazy loading
-$processedOrders = [];
-foreach ($this->order_model->where('status', 'processing')->lazy() as $order) {
-    $processedOrders[] = calculateTotals($order);
+// Example 4: chunk() - Split the collection into smaller collections
+$userChunks = $users->chunk(5);
+foreach ($userChunks as $index => $chunk) {
+    echo "Processing chunk #" . ($index + 1) . "<br>";
+    foreach ($chunk as $user) {
+        echo "- Processing user: " . $user['username'] . "<br>";
+    }
 }
+
+// Example 5: map() - Transform each item in the collection
+$transformedUsers = $users->map(function($user) {
+    $user['full_name'] = $user['first_name'] . ' ' . $user['last_name'];
+    $user['is_adult'] = $user['age'] >= 18;
+    return $user;
+});
+
+foreach ($transformedUsers as $user) {
+    echo $user['full_name'] . " is " . ($user['is_adult'] ? 'an adult' : 'a minor') . "<br>";
+}
+
+// Example 6: filter() - Keep only items that pass the truth test
+$adultUsers = $users->filter(function($user) {
+    return $user['age'] >= 18;
+});
+
+foreach ($adultUsers as $user) {
+    echo "Adult user: " . $user['username'] . " (age: " . $user['age'] . ")<br>";
+}
+
+// Example 7: reject() - Remove items that pass the truth test
+$nonAdminUsers = $users->reject(function($user) {
+    return $user['role'] === 'admin';
+});
+
+foreach ($nonAdminUsers as $user) {
+    echo "Non-admin user: " . $user['username'] . "<br>";
+}
+
+// Example 8: each() - Execute code for each item
+$users->each(function($user) {
+    echo "Processing user " . $user['id'] . ": " . $user['username'] . "<br>";
+    // Perform operations on the user
+    return true; // continue iteration (return false to break)
+});
+
+// Example 9: tap() - Perform an operation on the collection and return it
+$users->tap(function($collection) {
+    echo "The collection has " . $collection->count() . " items.<br>";
+})->each(function($user) {
+    // Process each user
+});
+
+// Example 10: all() - Get all items as an array
+$allUsers = $users->all();
+print_r($allUsers); // Full array of all users
+
+// Example 11: implode() - Concatenate values of a given key as a string
+$allUsernames = $users->implode('username', ', ');
+echo "All usernames: " . $allUsernames;
+
+// Example 12: take() - Get a specific number of items
+$firstTenUsers = $users->take(10);
+foreach ($firstTenUsers as $user) {
+    echo "User from first 10: " . $user['username'] . "<br>";
+}
+
+// Example 13: skip() - Skip a specific number of items
+$afterFirstHundred = $users->skip(100)->take(10);
+foreach ($afterFirstHundred as $user) {
+    echo "User after first 100: " . $user['username'] . "<br>";
+}
+
+// Example 14: Chaining multiple methods
+$result = $this->User_model
+    ->where('status', 'active')
+    ->lazy(150)
+    ->filter(function($user) {
+        return $user['age'] >= 21;
+    })
+    ->map(function($user) {
+        $user['full_name'] = $user['first_name'] . ' ' . $user['last_name'];
+        return $user;
+    })
+    ->skip(10)
+    ->take(5)
+    ->pluck('full_name')
+    ->all();
+
+print_r($result); // Array of 5 full names, after skipping the first 10
+
+// Example 15: Using setChunkSize to change chunk size after creation
+$users = $this->User_model->lazy(); // Default chunk size
+$users->setChunkSize(50); // Change to smaller chunks for memory optimization
+
+// Example 16: Using lazy collection with complex queries
+$specialUsers = $this->User_model
+    ->with(['profile', 'orders'])
+    ->where('status', 'active')
+    ->where('created_at >', date('Y-m-d', strtotime('-30 days')))
+    ->orderBy('created_at', 'DESC')
+    ->lazy(75)
+    ->filter(function($user) {
+        // Only users with complete profiles
+        return !empty($user['profile']) && 
+               !empty($user['profile']['address']) && 
+               !empty($user['profile']['phone']);
+    });
+
+// Example 17: Memory-efficient large data export
+$fileName = 'users_export_' . date('Y-m-d') . '.csv';
+$file = fopen($fileName, 'w');
+fputcsv($file, ['ID', 'Username', 'Email', 'Full Name', 'Created Date']);
+
+$this->User_model
+    ->lazy(200)
+    ->each(function($user) use ($file) {
+        fputcsv($file, [
+            $user['id'],
+            $user['username'],
+            $user['email'],
+            $user['first_name'] . ' ' . $user['last_name'],
+            $user['created_at']
+        ]);
+    });
+
+fclose($file);
+echo "Export completed to $fileName";
+
+// Example 18: Data aggregation without loading everything into memory
+$stats = [
+    'total' => 0,
+    'age_sum' => 0,
+    'min_age' => PHP_INT_MAX,
+    'max_age' => 0,
+    'by_country' => []
+];
+
+$this->User_model
+    ->lazy(300)
+    ->each(function($user) use (&$stats) {
+        $stats['total']++;
+        $stats['age_sum'] += $user['age'];
+        $stats['min_age'] = min($stats['min_age'], $user['age']);
+        $stats['max_age'] = max($stats['max_age'], $user['age']);
+        
+        $country = $user['country'];
+        if (!isset($stats['by_country'][$country])) {
+            $stats['by_country'][$country] = 0;
+        }
+        $stats['by_country'][$country]++;
+    });
+
+$stats['avg_age'] = $stats['age_sum'] / $stats['total'];
+print_r($stats);
 
 // ---------------
 // FILTER EXAMPLES
@@ -407,25 +578,57 @@ $premiumUsers = $this->user_model->filter(function($user) {
 // SORT BY EXAMPLES
 // ---------------
 
-// Example 1: Sort users by last login date
-$recentUsers = $this->user_model->sortBy('last_login_at', SORT_DESC);
+// Example 1: Get all users with their relationships and sort by name
+$users = $this->User_model->with('profile', 'profile.roles', 'department')
+    ->setAppends(['status_badge'])
+    ->safeOutputWithException(['status_badge'])
+    ->withTrashed()
+    ->sortBy('name');
 
-// Example 2: Sort products by relation field
-$productsByCategory = $this->product_model->with('category')->sortBy('category.priority');
+// Example 2: Sort by role rank (from the first profile record)
+$sortedByRoleRank = $this->User_model->sortBy('profile.0.roles.role_rank', SORT_DESC);
+
+// Example 3: Sort by department name (handles null values)
+$sortedByDept = $this->User_model->sortBy(function($user) {
+    return $user['department'] ? $user['department']['department_name'] : null;
+});
+
+// Example 4: Sort by multiple criteria - first by department name, then by name
+$sortedMultiple = $this->User_model->sortByMultiple([
+    ['department.department_name', 'asc'],
+    ['name', 'asc']
+]);
+
+// Example 5: Sort by main profile role rank
+$sortedByMainRole = $this->User_model->sortBy(function($user) {
+    if (empty($user['profile'])) return null;
+    
+    // Find the main profile
+    foreach ($user['profile'] as $profile) {
+        if ($profile['is_main'] == '1') {
+            return $profile['roles']['role_rank'];
+        }
+    }
+    
+    return null;
+});
 
 // ---------------
-// IS EMPTY / IS NOT EMPTY EXAMPLES
+// EXISTS / DOES NOT EXISTS EXAMPLES
 // ---------------
 
 // Example 1: Check if there are any pending orders
-if ($this->order_model->where('status', 'pending')->isNotEmpty()) {
+if ($this->order_model->where('status', 'pending')->doesntExist()) {
     // Logic process
 }
 
 // Example 2: Show empty state for products
-if ($this->product_model->where('category_id', 5)->isEmpty()) {
+if ($this->product_model->where('category_id', 5)->exists()) {
     // Logic process
 }
+
+// Example 3: Set the value to the variable
+$hasAdmin = $this->User_model->where('is_role', 'superadmin')->exists();
 
 // ---------------
 // CONTAINS EXAMPLES
@@ -438,6 +641,16 @@ $hasPremiumUsers = $this->user_model->contains('subscription_type', 'premium');
 $hasNewOrders = $this->order_model->contains(function($order) {
     return strtotime($order['created_at']) > strtotime('-24 hours');
 });
+
+$hasITDepartment = $this->User_model->contains(function($user) {
+    return isset($user['department']) && $user['department']['department_code'] === 'IT';
+});
+
+// Example 3: Check if any superadmin users exist
+$hasSuperAdmin = $this->User_model->contains('name', 'SUPER ADMINISTRATOR');
+
+// Example 4: Check if first roles is rank up to 5000
+$hasHighRankRole = $this->User_model->contains('profile.0.roles.role_rank', '>', '5000');
 
 ```
 
@@ -457,6 +670,11 @@ This project is licensed under the MIT License.
 - Basic relationship handling
 - Security layer implementation
 
+### v1.0.9 (2025-04-04)
+- Introduce the lazy(), cursor(), filter(), pluck(), contains(), exists(), doesntExist(), sortBy(), sortByMultiple() method.
+- Fixed issue with eager load.
+- Improved performanced.
+
 </details>
 
 ## 📫 Support
@@ -469,6 +687,30 @@ For bugs and feature requests, please use the [GitHub Issues](https://github.com
 - Built on CodeIgniter 3's solid foundation
 
 ## 📄 Basic Documentation
+
+#### Collection Methods
+
+| Function        | Description                                                                                                                                       |
+|-----------------|---------------------------------------------------------------------------------------------------------------------------------------------------|
+| `chunk()`       | Process data in chunks to handle large datasets efficiently. Similar to Laravel's `chunk()`.                                                      |
+| `cursor()`      | Returns a generator that lazily iterates over query results one record at a time with chunk size 1000. Similar to Laravel's `cursor()`.           | 
+| `lazy()`        | Returns a lazy collection of results, loading items as needed to conserve memory. Similar to Laravel's `lazy()` method.                           | 
+| `filter()`      | Filters the collection using a callback function, keeping only items that pass the given truth test. Similar to Laravel's collection `filter()`.  | 
+| `pluck()`       | Retrieves all values for a given key from the collection. Similar to Laravel's collection `pluck()` method.                                       | 
+| `contains()`    | Determines if the collection contains a given item or if a given key-value pair exists in the collection. Similar to Laravel's collection `contains()` method. |
+| `get()`         | Retrieves all data from the database based on the specified criteria.                                                                             |
+| `fetch()`       | Retrieves a single record from the database based on the specified criteria.                                                                      |
+| `first()`       | Retrieves the first record based on the query.                                                                                                    |
+| `last()`        | Retrieves the last record based on the query.                                                                                                     |
+| `count()`       | Counts the number of records matching the specified criteria.                                                                                     |
+| `find()`        | Finds a record by its primary key (ID).                                                                                                           |
+| `toSql()`       | Returns the SQL query string (without eager loading query).                                                                                       |
+| `exists()`      | Determines if the collection has at least one item. Returns true if the collection has one or more items. Similar to Laravel's collection `exists()`.    | 
+| `doesntExist()` | Determines if the collection is empty. Returns true if the collection has no items. Similar to Laravel's collection `doesntExist()`.                    | 
+| `sortBy()`         | Sorts the collection by the given key. Similar to Laravel's collection `sortBy()` method.                                                              | 
+| `sortByMultiple()` | Sorts the collection by multiple keys. Allows you to specify an array of keys and their corresponding sort directions. Similar to Laravel's `sortBy()` but with multiple criteria. |
+
+<hr>
 
 #### Query Functions
 
@@ -519,23 +761,8 @@ For bugs and feature requests, please use the [GitHub Issues](https://github.com
 | `groupByRaw()`  | Adds a raw GROUP BY clause. Similar to Laravel's `groupByRaw()`.                                                                                  |
 | `having()`      | Adds a HAVING clause. Similar to Laravel's `having()`.                                                                                            |
 | `havingRaw()`   | Adds a raw HAVING clause. Similar to Laravel's `havingRaw()`.                                                                                     |
-| `chunk()`       | Process data in chunks to handle large datasets efficiently. Similar to Laravel's `chunk()`.                                                      |
-| `lazy()`        | Returns a lazy collection of results, loading items as needed to conserve memory. Similar to Laravel's `lazy()` method.                           | 
-| `filter()`      | Filters the collection using a callback function, keeping only items that pass the given truth test. Similar to Laravel's collection `filter()`.  | 
-| `pluck()`       | Retrieves all values for a given key from the collection. Similar to Laravel's collection `pluck()` method.                                       | 
-| `sortBy()`      | Sorts the collection by the given key. Similar to Laravel's collection `sortBy()` method.                                                         | 
-| `isEmpty()`     | Determines if the collection is empty. Returns true if the collection has no items. Similar to Laravel's collection `isEmpty()`.                  | 
-| `isNotEmpty()`  | Determines if the collection is not empty. Returns true if the collection has at least one item. Similar to Laravel's collection `isNotEmpty()`.  |
-| `contains()`    | Determines if the collection contains a given item or if a given key-value pair exists in the collection. Similar to Laravel's collection `contains()` method. |
-| `get()`         | Retrieves all data from the database based on the specified criteria.                                                                             |
-| `fetch()`       | Retrieves a single record from the database based on the specified criteria.                                                                      |
-| `first()`       | Retrieves the first record based on the query.                                                                                                    |
-| `last()`        | Retrieves the last record based on the query.                                                                                                     |
-| `count()`       | Counts the number of records matching the specified criteria.                                                                                     |
-| `find()`        | Finds a record by its primary key (ID).                                                                                                           |
 | `withTrashed()` | Retrieves both soft deleted and non-deleted records from the database. When using this method, the results include records that have been soft deleted (i.e., those with a `deleted_at` timestamp) alongside active records.                                                                                                                                         |
 | `onlyTrashed()` | Retrieves only the records that have been soft deleted (i.e., records with a `deleted_at` timestamp). This method excludes active (non-deleted) records from the query results. |
-| `toSql()`       | Returns the SQL query string (without eager loading query).                                                                                       |
 
 <hr>
 
@@ -546,6 +773,7 @@ For bugs and feature requests, please use the [GitHub Issues](https://github.com
 | `setPaginateFilterColumn()` | Sets the filter conditions for pagination. If not set, all columns from the main table are queried.                                           |
 | `paginate()`             | Custom pagination method that works without the datatable library. Allows paginating results based on the specified criteria.                    |
 | `paginate_ajax()`        | Pagination method specifically designed to work with AJAX requests and integrate with datatables.                                                |
+| `paginate_select_input()`| Custom method for handling pagination with the select input (e.g., input for changing the number of results per page).                           |
 
 <hr>
 
