@@ -686,17 +686,29 @@ class MY_Model extends CI_Model
      * Retrieves results in chunks, yielding each record one by one.
      * Similar to Laravel's cursor() method, this function processes large datasets
      * in a memory-efficient manner by fetching and yielding records one at a time.
-     * 
+     *
+     * @param int $chunkSize Optional. The number of records to load in each database query. Default: 500
      * @return Generator A generator that yields results
      */
-    public function cursor()
+    public function cursor($chunkSize = 500)
     {
-        // Store the original query state
+        // Clone the original database state
         $originalState = $this->_cloneDatabaseSettings();
+        $this->_database = clone $originalState['db'];
+
+        // Check if primary key is indexed
+        $isIndexed = $this->isColumnIndexed($originalState['primaryKey'], $originalState['table']);
+
+        if ($this->debug) {
+            log_message('debug', "Cursor using " . ($isIndexed ? "SEEK-based ✅" : "OFFSET-based ❌") . " pagination.");
+        }
+
+        // Initialize pagination variables
         $offset = 0;
-        $chunkSize = 1000;
+        $lastId = 0;
 
         while (true) {
+
             // Restore the original query conditions
             $this->_database = clone $originalState['db'];
 
@@ -709,32 +721,48 @@ class MY_Model extends CI_Model
             $this->returnType = $originalState['returnType'];
             $this->_paginateColumn = $originalState['_paginateColumn'] ?? [];
 
-            // Apply limit and offset for the current chunk
-            $this->limit($chunkSize)->offset($offset);
+            // Log query execution start time
+            $startTime = microtime(true);
 
-            // Get results
-            $results = $this->get();
-
-            if (empty($results)) {
-                break;
+            // Apply SEEK or OFFSET pagination
+            if ($isIndexed) {
+                $this->where($this->primaryKey, '>', $lastId)->orderBy($this->primaryKey, 'ASC');
+            } else {
+                $this->offset($offset);
             }
 
-            // Yield each result individually
+            // Fetch results
+            $results = $this->limit($chunkSize)->get();
+
+            // Log query execution time
+            $executionTime = microtime(true) - $startTime;
+            if ($this->debug) {
+                log_message('debug', "Cursor - ".($isIndexed ? "SEEK" : "OFFSET") . " Query Execution Time: {$executionTime}s for chunk.");
+            }
+
+            // Break if no more results
+            if (empty($results)) break;
+
             foreach ($results as $result) {
                 yield $result;
+                if ($isIndexed) {
+                    $lastId = $result[$this->primaryKey]; // Update last processed ID for SEEK pagination
+                }
             }
 
-            $offset += $chunkSize;
+            // Update offset only if using OFFSET pagination
+            if (!$isIndexed) {
+                $offset += $chunkSize;
+            }
 
-            // Clear the results to free memory
+            // Memory cleanup
             unset($results);
+            if (function_exists('gc_collect_cycles')) gc_collect_cycles();
 
-            if (function_exists('gc_collect_cycles')) {
-                gc_collect_cycles();
-            }
+            usleep(1500);
         }
 
-        // Reset internal properties for next query
+        // Reset internal properties
         $this->resetQuery();
     }
 
@@ -745,7 +773,7 @@ class MY_Model extends CI_Model
      * allowing for memory-efficient processing of large datasets. The LazyCollection implements Iterator
      * and Countable interfaces, providing a fluent interface similar to Laravel's collections.
      * 
-     * @param int $chunkSize Optional. The number of records to load in each database query. Default: 100
+     * @param int $chunkSize Optional. The number of records to load in each database query. Default: 500
      * @return LazyCollection Returns a LazyCollection instance that lazily loads query results
      * @throws Exception If there's an error creating the lazy collection
      * 
@@ -767,33 +795,63 @@ class MY_Model extends CI_Model
      *     // Each iteration only loads data when needed
      * }
      */
-    public function lazy($chunkSize = 100)
+    public function lazy($chunkSize = 500)
     {
         try {
             $model = $this;
 
-            // Create a function that will be called when data is needed
-            $source = function ($size, $offset) use ($model) {
+            // Check if primary key is indexed
+            $isIndexed = $this->isColumnIndexed($this->primaryKey, $this->table);
+
+            if ($this->debug) {
+                log_message('debug', "Lazy Collection using " . ($isIndexed ? "SEEK-based ✅" : "OFFSET-based ❌") . " pagination.");
+            }
+
+            // Data source function
+            $source = function ($size, $offset) use ($model, $isIndexed) {
                 // Clone the model to keep the query intact
                 $clonedModel = clone $model;
 
-                // Apply limit and offset
-                $clonedModel->limit($size)->offset($offset);
+                // Log start time
+                $startTime = microtime(true);
 
-                // Execute the query and get results
+                // Choose pagination strategy
+                if ($isIndexed) {
+                    if ($offset == 0) {
+                        $lastId = 0;
+                    } else {
+                        $lastId = $offset;
+                    }
+
+                    if ($this->debug) {
+                        log_message('debug', "Lazy Collection query for last id : {$lastId}");
+                    }
+
+                    $clonedModel->limit($size)->where("{$clonedModel->primaryKey}", ">", $lastId)->orderBy($clonedModel->primaryKey, 'ASC');
+                } else {
+                    $clonedModel->limit($size)->offset($offset);
+                }
+
+                // Execute the query
                 $results = $clonedModel->get();
 
-                // Return empty array if no results
-                if (empty($results)) {
-                    return [];
+                // Log query execution time
+                $executionTime = microtime(true) - $startTime;
+
+                if ($clonedModel->debug) {
+                    log_message('debug', 'Lazy - ' . ($isIndexed ? "SEEK" : "OFFSET") . " Query Execution Time: {$executionTime}s for chunk.");
                 }
+
+                if (empty($results)) return [];
 
                 return is_array($results) ? $results : [$results];
             };
 
-            // Create a new LazyCollection instance with the specified chunk size
+            // Create LazyCollection
             $collection = new LazyCollection($source);
             $collection->setChunkSize($chunkSize);
+
+            if (function_exists('gc_collect_cycles')) gc_collect_cycles();
 
             return $collection;
         } catch (Exception $e) {
@@ -804,10 +862,19 @@ class MY_Model extends CI_Model
 
     public function chunk($size, callable $callback)
     {
-        $offset = 0;
-
         // Store the original query state
         $originalState = $this->_cloneDatabaseSettings();
+
+        // Initialize pagination variables
+        $offset = 0;
+        $lastId = 0;
+
+        // Check if primary key is indexed
+        $isIndexed = $this->isColumnIndexed($originalState['primaryKey'], $originalState['table']);
+
+        if ($this->debug) {
+            log_message('debug', "Chunk using " . ($isIndexed ? "SEEK-based ✅" : "OFFSET-based ❌") . " pagination.");
+        }
 
         while (true) {
             // Restore the original query conditions by cloning
@@ -822,11 +889,24 @@ class MY_Model extends CI_Model
             $this->returnType = $originalState['returnType'];
             $this->_paginateColumn = $originalState['_paginateColumn'] ?? [];
 
-            // Apply limit and offset for the current chunk
-            $this->limit($size)->offset($offset);
+            // Log query execution start time
+            $startTime = microtime(true);
 
-            // Get results 
-            $results = $this->get();
+            // Apply SEEK or OFFSET pagination
+            if ($isIndexed) {
+                $this->where($this->primaryKey, '>', $lastId)->orderBy($this->primaryKey, 'ASC');
+            } else {
+                $this->offset($offset);
+            }
+
+            // Fetch results
+            $results = $this->limit($size)->get();
+
+            // Log query execution time
+            $executionTime = microtime(true) - $startTime;
+            if ($this->debug) {
+                log_message('debug', "Chunk - ".($isIndexed ? "SEEK" : "OFFSET") . " Query Execution Time: {$executionTime}s for chunk.");
+            }
 
             if (empty($results)) {
                 break;
@@ -836,7 +916,12 @@ class MY_Model extends CI_Model
                 break;
             }
 
-            $offset += $size;
+            // Update lastId for seek-based pagination
+            if ($isIndexed) {
+                $lastId = end($results)[$this->primaryKey];  // Get the last item's primary key
+            } else {
+                $offset += $size;
+            }
 
             // Clear the results to free memory
             unset($results);
@@ -2209,6 +2294,29 @@ class MY_Model extends CI_Model
         ini_set('display_startup_errors', 1);
         error_reporting($level);
         return $this;
+    }
+
+    private function isColumnIndexed($columnName, $tableName)
+    {
+        $query = $this->_database->query(
+            "
+            SELECT COUNT(1) as indexed 
+            FROM INFORMATION_SCHEMA.STATISTICS 
+            WHERE TABLE_SCHEMA = DATABASE() 
+            AND TABLE_NAME = ? 
+            AND INDEX_NAME != 'PRIMARY' 
+            AND COLUMN_NAME = ?",
+            [$tableName, $columnName]
+        );
+
+        $result = $query->row_array();
+        $isIndexed = !empty($result) && $result['indexed'] > 0;
+
+        if ($this->debug) {
+            log_message('debug', "Index check for column `$columnName` on table `$tableName`: " . ($isIndexed ? "Indexed ✅" : "Not Indexed ❌"));
+        }
+
+        return $isIndexed;
     }
 
     /**
