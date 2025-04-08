@@ -85,6 +85,10 @@ class MY_Model extends CI_Model
     public $_validationLang = 'english'; // used to set validation language for error message, default is english
     public $debug = false; // used to set debug mode
 
+    protected $_indexString = null;
+    protected $_indexType = 'USE INDEX';
+    protected $_suggestIndexEnabled = false;
+
     public function __construct()
     {
         $this->db = $this->load->database($this->connection, TRUE);
@@ -483,8 +487,7 @@ class MY_Model extends CI_Model
     public function rawQuery($query, $binding = [])
     {
         $query = $this->_database->compile_binds($query, $binding);
-        $this->_database = $this->_database->query($query);
-        return $this;
+        return $this->_database->query($query);
     }
 
     public function join($table, $condition, $type = 'inner')
@@ -720,6 +723,8 @@ class MY_Model extends CI_Model
             $this->eagerLoad = $originalState['eagerLoad'] ?? [];
             $this->returnType = $originalState['returnType'];
             $this->_paginateColumn = $originalState['_paginateColumn'] ?? [];
+            $this->_indexString = $originalState['index'] ?? null;
+            $this->_indexType = $originalState['indexType'] ?? 'USE INDEX';
 
             // Log query execution start time
             $startTime = microtime(true);
@@ -737,7 +742,7 @@ class MY_Model extends CI_Model
             // Log query execution time
             $executionTime = microtime(true) - $startTime;
             if ($this->debug) {
-                log_message('debug', "Cursor - ".($isIndexed ? "SEEK" : "OFFSET") . " Query Execution Time: {$executionTime}s for chunk.");
+                log_message('debug', "Cursor - " . ($isIndexed ? "SEEK" : "OFFSET") . " Query Execution Time: {$executionTime}s for chunk.");
             }
 
             // Break if no more results
@@ -888,7 +893,9 @@ class MY_Model extends CI_Model
             $this->eagerLoad = $originalState['eagerLoad'] ?? [];
             $this->returnType = $originalState['returnType'];
             $this->_paginateColumn = $originalState['_paginateColumn'] ?? [];
-
+            $this->_indexString = $originalState['index'] ?? null;
+            $this->_indexType = $originalState['indexType'] ?? 'USE INDEX';
+            
             // Log query execution start time
             $startTime = microtime(true);
 
@@ -905,7 +912,7 @@ class MY_Model extends CI_Model
             // Log query execution time
             $executionTime = microtime(true) - $startTime;
             if ($this->debug) {
-                log_message('debug', "Chunk - ".($isIndexed ? "SEEK" : "OFFSET") . " Query Execution Time: {$executionTime}s for chunk.");
+                log_message('debug', "Chunk - " . ($isIndexed ? "SEEK" : "OFFSET") . " Query Execution Time: {$executionTime}s for chunk.");
             }
 
             if (empty($results)) {
@@ -940,7 +947,7 @@ class MY_Model extends CI_Model
     public function count()
     {
         $this->_withTrashQueryFilter();
-        $query = $this->_database->count_all_results($this->table);
+        $query = $this->_database->count_all_results($this->getTableWithIndex());
         $this->resetQuery();
         return $query;
     }
@@ -950,7 +957,7 @@ class MY_Model extends CI_Model
         $this->_withTrashQueryFilter();
         $this->_applyAggregates();
 
-        $query = $this->_database->get_compiled_select($this->table);
+        $query = $this->_database->get_compiled_select($this->getTableWithIndex());
         $this->resetQuery();
         return $query;
     }
@@ -1178,7 +1185,12 @@ class MY_Model extends CI_Model
             $this->_applyAggregates();
 
             // Execute Query
-            $query = $this->_database->get($this->table);
+            $query = $this->_database->get($this->getTableWithIndex());
+
+            // Log query performance if debug is enabled
+            if ($this->debug) {
+                $this->_logQueryPerformance($this->_database->last_query());
+            }
 
             // Convert to Array
             $result = $query->result_array();
@@ -1186,6 +1198,7 @@ class MY_Model extends CI_Model
             // Free result to reduce memory usage
             if (isset($query) && method_exists($query, 'free_result')) {
                 $query->free_result();
+                unset($query);
             }
 
             if (!empty($result)) {
@@ -1217,7 +1230,12 @@ class MY_Model extends CI_Model
             $this->_applyAggregates();
 
             // Execute Query
-            $query = $this->_database->get($this->table);
+            $query = $this->_database->get($this->getTableWithIndex());
+
+            // Log query performance if debug is enabled
+            if ($this->debug) {
+                $this->_logQueryPerformance($this->_database->last_query());
+            }
 
             // Convert to Array
             $result = $query->row_array();
@@ -1225,6 +1243,7 @@ class MY_Model extends CI_Model
             // Free result to reduce memory usage
             if (isset($query) && method_exists($query, 'free_result')) {
                 $query->free_result();
+                unset($query);
             }
 
             if (!empty($result)) {
@@ -1406,7 +1425,7 @@ class MY_Model extends CI_Model
             $data = array_merge($conditions, $values);
 
             // Check if a record exists with the given attributes
-            $existingRecord = get_instance()->db->select($this->primaryKey)->from($this->table)->where($conditions)->limit(1)->get()->row_array();
+            $existingRecord = get_instance()->db->select($this->primaryKey)->from($this->getTableWithIndex())->where($conditions)->limit(1)->get()->row_array();
 
             if (!empty($existingRecord)) {
                 // If record exists, update it
@@ -2110,8 +2129,6 @@ class MY_Model extends CI_Model
      */
     public function reset_connection()
     {
-        // $this->_database->close();
-        $this->_database->trans_off();
         $this->_set_connection();
         return $this;
     }
@@ -2242,6 +2259,8 @@ class MY_Model extends CI_Model
             'eagerLoad' => $this->eagerLoad,
             'returnType' => $this->returnType,
             '_paginateColumn' => $this->_paginateColumn,
+            'index' => $this->_indexString,
+            'indexType' => $this->_indexType,
             'db' => clone $this->_database
         ];
     }
@@ -2281,7 +2300,7 @@ class MY_Model extends CI_Model
 
     private function forSubQuery(Closure $callback)
     {
-        $query = $this->_database->from($this->table);
+        $query = $this->_database->from($this->getTableWithIndex());
         $callback($query);
         return $query->get_compiled_select();
     }
@@ -2294,29 +2313,6 @@ class MY_Model extends CI_Model
         ini_set('display_startup_errors', 1);
         error_reporting($level);
         return $this;
-    }
-
-    private function isColumnIndexed($columnName, $tableName)
-    {
-        $query = $this->_database->query(
-            "
-            SELECT COUNT(1) as indexed 
-            FROM INFORMATION_SCHEMA.STATISTICS 
-            WHERE TABLE_SCHEMA = DATABASE() 
-            AND TABLE_NAME = ? 
-            AND INDEX_NAME != 'PRIMARY' 
-            AND COLUMN_NAME = ?",
-            [$tableName, $columnName]
-        );
-
-        $result = $query->row_array();
-        $isIndexed = !empty($result) && $result['indexed'] > 0;
-
-        if ($this->debug) {
-            log_message('debug', "Index check for column `$columnName` on table `$tableName`: " . ($isIndexed ? "Indexed ✅" : "Not Indexed ❌"));
-        }
-
-        return $isIndexed;
     }
 
     /**
@@ -2576,6 +2572,194 @@ class MY_Model extends CI_Model
         $this->aggregateRelations = [];
         $this->returnType = 'array';
         $this->_paginateColumn = [];
+        $this->_indexString = null;
+        $this->_indexType = 'USE INDEX';
+        $this->_suggestIndexEnabled = false;
+    }
+
+    # PERFORMANCE HELPER
+
+    public function getTableWithIndex()
+    {
+        if (empty($this->_indexString)) {
+            return $this->table;
+        }
+
+        return $this->table . ' ' . $this->_indexType . ' (' . $this->_indexString . ')';
+    }
+
+    /**
+     * Forces MySQL to use specific indexes for the query
+     *
+     * @param string|array $indexName Index name or array of index names
+     * @return $this
+     */
+    public function forceIndex($indexName = [])
+    {
+        if (empty($indexName)) {
+            return $this;
+        }
+
+        $this->_indexString = is_array($indexName) ? implode(', ', $indexName) : $indexName;
+        $this->_indexType = 'FORCE INDEX';
+        return $this;
+    }
+
+    /**
+     * Suggests MySQL to use specific indexes for the query
+     *
+     * @param string|array $indexName Index name or array of index names
+     * @return $this
+     */
+    public function useIndex($indexName = [])
+    {
+        if (empty($indexName)) {
+            return $this;
+        }
+
+        $this->_indexString = is_array($indexName) ? implode(', ', $indexName) : $indexName;
+        $this->_indexType = 'USE INDEX';
+        return $this;
+    }
+
+    /**
+     * Instructs MySQL to ignore specific indexes for the query
+     *
+     * @param string|array $indexName Index name or array of index names
+     * @return $this
+     */
+    public function ignoreIndex($indexName = [])
+    {
+        if (empty($indexName)) {
+            return $this;
+        }
+
+        $this->_indexString = is_array($indexName) ? implode(', ', $indexName) : $indexName;
+        $this->_indexType = 'IGNORE INDEX';
+        return $this;
+    }
+
+    /**
+     * Analyzes the current query and suggests optimal indexes
+     * This should be used during development to identify missing indexes
+     *
+     * @param bool $explain Whether to run EXPLAIN on the query
+     * @return array|$this If $explain is true, returns the explain result, otherwise returns $this
+     */
+    public function suggestIndex($explain = true)
+    {
+        if (!$explain) {
+            // Just mark that we should log index suggestions after executing the query
+            $this->_suggestIndexEnabled = true;
+            return $this;
+        }
+
+        // Get the compiled select query
+        $query = (clone $this->_database)->get_compiled_select($this->table, false);
+
+        // Run EXPLAIN on the query
+        $explainResults = (clone $this->_database)->query("EXPLAIN $query")->result_array();
+
+        $suggestions = [];
+        foreach ($explainResults as $row) {
+            // Look for rows that indicate poor performance
+            if (
+                (isset($row['type']) && in_array($row['type'], ['ALL', 'index', 'range'])) ||
+                (isset($row['key']) && empty($row['key'])) ||
+                (isset($row['rows']) && $row['rows'] > 1000)
+            ) {
+                // Identify columns that would benefit from indexes
+                if (isset($row['possible_keys']) && empty($row['possible_keys'])) {
+                    // Extract columns from 'ref' or 'where' clause
+                    $columns = [];
+
+                    if (isset($row['ref']) && !empty($row['ref'])) {
+                        $columns[] = $row['ref'];
+                    }
+
+                    if (isset($row['Extra']) && strpos($row['Extra'], 'Using where') !== false) {
+                        // Try to extract column names from the compiled query's WHERE clause
+                        preg_match_all('/WHERE\s+([^\s]+)\s*=/', $query, $matches);
+                        if (!empty($matches[1])) {
+                            $columns = array_merge($columns, $matches[1]);
+                        }
+                    }
+
+                    if (!empty($columns)) {
+                        $suggestions[] = [
+                            'table' => $row['table'],
+                            'suggested_columns' => array_unique($columns),
+                            'type' => 'Missing index',
+                            'reason' => "Query scanning {$row['rows']} rows with type {$row['type']}"
+                        ];
+                    }
+                }
+            }
+        }
+
+        // Log the suggestions
+        if (!empty($suggestions)) {
+            log_message('debug', 'Index Suggestions: ' . json_encode($suggestions, JSON_PRETTY_PRINT));
+        } else {
+            log_message('debug', 'No index suggestions for the current query. The query seems optimized.');
+        }
+
+        return $this;
+    }
+
+    private function _logQueryPerformance($query)
+    {
+        if (!$this->debug) {
+            return;
+        }
+
+        // Run EXPLAIN on the query
+        try {
+            $explainResults = (clone $this->_database)->query("EXPLAIN $query")->result_array();
+
+            $tableScans = array_filter($explainResults, function ($row) {
+                return isset($row['type']) && $row['type'] === 'ALL';
+            });
+
+            $inefficientIndexes = array_filter($explainResults, function ($row) {
+                return (isset($row['key']) && !empty($row['key'])) && // Using an index
+                    (isset($row['rows']) && $row['rows'] > 5000);  // But still scanning many rows
+            });
+
+            if (!empty($tableScans)) {
+                log_message('warning', 'FULL TABLE SCAN detected: ' . json_encode($tableScans, JSON_PRETTY_PRINT));
+                log_message('warning', 'Query causing full table scan: ' . $query);
+            }
+
+            if (!empty($inefficientIndexes)) {
+                log_message('warning', 'Inefficient index usage detected: ' . json_encode($inefficientIndexes, JSON_PRETTY_PRINT));
+            }
+        } catch (Exception $e) {
+            log_message('error', 'Failed to analyze query performance: ' . $e->getMessage());
+        }
+    }
+
+    private function isColumnIndexed($columnName, $tableName)
+    {
+        $query = $this->_database->query(
+            "
+            SELECT COUNT(1) as indexed 
+            FROM INFORMATION_SCHEMA.STATISTICS 
+            WHERE TABLE_SCHEMA = DATABASE() 
+            AND TABLE_NAME = ? 
+            AND INDEX_NAME != 'PRIMARY' 
+            AND COLUMN_NAME = ?",
+            [$tableName, $columnName]
+        );
+
+        $result = $query->row_array();
+        $isIndexed = !empty($result) && $result['indexed'] > 0;
+
+        if ($this->debug) {
+            log_message('debug', "Index check for column `$columnName` on table `$tableName`: " . ($isIndexed ? "Indexed ✅" : "Not Indexed ❌"));
+        }
+
+        return $isIndexed;
     }
 
     # SECURITY HELPER
@@ -2605,12 +2789,6 @@ class MY_Model extends CI_Model
         return $this;
     }
 
-    /**
-     * Sanitize output data if safe output is enabled
-     *
-     * @param mixed $data Data to sanitize
-     * @return mixed
-     */
     private function _safeOutputSanitize($data)
     {
         if (!$this->_secureOutput) {
@@ -2625,13 +2803,6 @@ class MY_Model extends CI_Model
         return $this->sanitize($data);
     }
 
-    /**
-     * Recursively sanitize data
-     *
-     * @param mixed $value Value to sanitize
-     * @return mixed
-     * @throws InvalidArgumentException
-     */
     private function sanitize($value = null)
     {
         // Check if $value is not null or empty
@@ -2677,16 +2848,6 @@ class MY_Model extends CI_Model
         }
     }
 
-    /**
-     * Recursively removes hidden keys from the given data array.
-     *
-     * This method takes an array ($data) and an array of hidden keys ($hidden).
-     * It removes keys listed in the $hidden array from $data.
-     * If a value in $data is an array, the method is called recursively.
-     *
-     * @param array $data The data array from which to remove hidden keys.
-     * @return array The modified data array with hidden keys removed.
-     */
     protected function removeHiddenDataRecursive($data)
     {
         // Flip the hidden array for faster key lookups

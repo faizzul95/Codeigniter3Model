@@ -1,5 +1,9 @@
 # Advanced MY_Model for CodeIgniter 3 🚀
 
+[![Latest Version](https://img.shields.io/packagist/v/onlyphp/codeigniter3-model.svg?style=flat-square)](https://packagist.org/packages/onlyphp/codeigniter3-model)
+[![Total Downloads](https://img.shields.io/packagist/dt/onlyphp/codeigniter3-model.svg?style=flat-square)](https://packagist.org/packages/onlyphp/codeigniter3-model)
+[![License](https://img.shields.io/packagist/l/onlyphp/codeigniter3-model.svg?style=flat-square)](LICENSE.md)
+
 A powerful extension of CodeIgniter 3's base Model class that brings modern ORM features to your CI3 applications. This package introduces Laravel-style eloquent features, advanced query capabilities, and robust database interaction layers while maintaining CodeIgniter's simplicity.
 
 ## ⚠️ Warning
@@ -674,6 +678,9 @@ This project is licensed under the MIT License.
 - Introduce the lazy(), cursor(), filter(), pluck(), contains(), exists(), doesntExist(), sortBy(), sortByMultiple() method.
 - Fixed issue with eager load.
 - Improved performanced.
+
+### v1.1.1 (2025-04-08)
+- Introduce the useIndex(), forceIndex(), ignoreIndex() & suggestIndex() method.
 
 </details>
 

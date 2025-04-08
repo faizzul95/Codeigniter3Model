@@ -36,7 +36,7 @@ trait PaginateQuery
         $this->_applyAggregates();
 
         // Count total rows before filter
-        $totalRecords = (int) (clone $this->_database)->count_all_results($this->table);
+        $totalRecords = (int) (clone $this->_database)->count_all_results($this->getTableWithIndex());
 
         // Apply custom filter (advanced search)
         if (!empty($customFilter) && is_array($customFilter)) {
@@ -47,7 +47,7 @@ trait PaginateQuery
         $this->_paginateSearchFilter($columns);
 
         // Count total rows after filter
-        $total = (int) (clone $this->_database)->count_all_results($this->table);
+        $total = (int) (clone $this->_database)->count_all_results($this->getTableWithIndex());
 
         // Fetch only the required page of results
         $this->limit($perPage)->offset($offset);
@@ -112,7 +112,7 @@ trait PaginateQuery
         $this->_applyAggregates();
 
         // Count total rows before filter
-        $totalRecords = (int) (clone $this->_database)->count_all_results($this->table);
+        $totalRecords = (int) (clone $this->_database)->count_all_results($this->getTableWithIndex());
 
         // Apply custom filter (advanced search)
         if (!empty($customFilter) && is_array($customFilter)) {
@@ -123,7 +123,7 @@ trait PaginateQuery
         $this->_paginateSearchFilter($columns);
 
         // Count total rows after filter
-        $total = (int) (clone $this->_database)->count_all_results($this->table);
+        $total = (int) (clone $this->_database)->count_all_results($this->getTableWithIndex());
 
         // Fetch only the required page of results
         $this->limit($dataPost['length'])->offset($dataPost['start']);
@@ -161,7 +161,7 @@ trait PaginateQuery
         $this->_paginateSearchFilter($columns);
 
         // Count total rows after filter
-        $total = (int) (clone $this->_database)->count_all_results($this->table);
+        $total = (int) (clone $this->_database)->count_all_results($this->getTableWithIndex());
 
         // Fetch only the required page of results
         $this->limit($perPage)->offset($offset);
