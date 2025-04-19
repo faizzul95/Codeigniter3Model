@@ -756,6 +756,7 @@ For bugs and feature requests, please use the [GitHub Issues](https://github.com
 | `orWhereBetween()`| Adds an OR WHERE BETWEEN clause. Similar to Laravel's `orWhereBetween()`.                                                                       |
 | `whereNotBetween()`| Adds a WHERE NOT BETWEEN clause. Similar to Laravel's `whereNotBetween()`.                                                                     |
 | `orWhereNotBetween()`| Adds an OR WHERE NOT BETWEEN clause. Similar to Laravel's `orWhereNotBetween()`.                                                             |
+| `when()`        | Applies a conditional callback to modify the query only when a given value or expression is true.                                                 |
 | `join()`        | Adds an INNER JOIN to the query. Similar to CodeIgniter’s `join()`.                                                                               |
 | `rightJoin()`   | Adds a RIGHT JOIN to the query. Similar to Laravel's `rightJoin()`.                                                                               |
 | `leftJoin()`    | Adds a LEFT JOIN to the query. Similar to Laravel's `leftJoin()`.                                                                                 |
@@ -795,17 +796,38 @@ For bugs and feature requests, please use the [GitHub Issues](https://github.com
 
 #### Eager Load Functions
 
-| Function      | Description                                                       |
-|---------------|-----------------------------------------------------------------------------------------------------------------------------------------------|
-| `with()`      | Eager loads related models to prevent N+1 query performance issues. Similar to Laravel's `with()`.                                            |
-| `withCount()` | Adds a count of related models as an additional attribute.                                                                                    |
-| `withSum()`   | Calculates the sum of a specific column from related models.                                                                                  |
-| `withMax()`   | Retrieves the maximum value of a specific column from related models.                                                                         |
-| `withMin()`   | Retrieves the minimum value of a specific column from related models.                                                                         |
-| `whereHas()`          | Filters models based on the existence of a related model that meets a specific condition.                                             |
-| `orWhereHas()`        | Adds an OR condition to filter models based on the existence of a related model that meets a specific condition.                      |
-| `whereDoesntHave()`   | Filters models that do not have any related models matching a specific condition.                                                     |
-| `orWhereDoesntHave()` | Adds an OR condition to filter models that do not have any related models matching a specific condition.                              |
+| Function                     | Description                                                                                                               |
+|-----------------------------|---------------------------------------------------------------------------------------------------------------------------|
+| `with()`                    | Eager loads related models to prevent N+1 query performance issues. Similar to Laravel's `with()`.                        |
+| `withCount()`               | Adds a count of related models as an additional attribute.                                                                |
+| `withSum()`                 | Calculates the sum of a specific column from related models.                                                              |
+| `withMax()`                 | Retrieves the maximum value of a specific column from related models.                                                     |
+| `withMin()`                 | Retrieves the minimum value of a specific column from related models.                                                     |
+| `withAvg()`                 | Retrieves the average value of a specific column from related models.                                                     |
+| `whereHas()`                | Filters models based on the existence of a related model that meets a specific condition.                                 |
+| `orWhereHas()`              | Adds an OR condition to filter models based on the existence of a related model that meets a specific condition.          |
+| `whereDoesntHave()`         | Filters models that do not have any related models matching a specific condition.                                         |
+| `orWhereDoesntHave()`       | Adds an OR condition to filter models that do not have any related models matching a specific condition.                  |
+| `whereRelation()`           | Adds a condition on a related model’s column, similar to a `where` clause on the relation.                                |
+| `orWhereRelation()`         | Adds an OR condition on a related model’s column.                                                                         |
+| `whereBetweenRelation()`    | Adds a `WHERE BETWEEN` condition on a related model’s column.                                                             |
+| `orWhereBetweenRelation()`  | Adds an `OR WHERE BETWEEN` condition on a related model’s column.                                                         |
+| `whereInRelation()`         | Adds a `WHERE IN` condition on a related model’s column.                                                                  |
+| `orWhereInRelation()`       | Adds an `OR WHERE IN` condition on a related model’s column.                                                              |
+| `whereNullRelation()`       | Adds a `WHERE IS NULL` condition on a related model’s column.                                                             |
+| `orWhereNullRelation()`     | Adds an `OR WHERE IS NULL` condition on a related model’s column.                                                         |
+| `whereNotNullRelation()`    | Adds a `WHERE IS NOT NULL` condition on a related model’s column.                                                         |
+| `orWhereNotNullRelation()`  | Adds an `OR WHERE IS NOT NULL` condition on a related model’s column.                                                     |
+| `whereDateRelation()`       | Filters related model’s date column by a specific date.                                                                   |
+| `orWhereDateRelation()`     | Adds an OR condition to filter related model’s date column by a specific date.                                            |
+| `whereMonthRelation()`      | Filters related model’s date column by month.                                                                             |
+| `orWhereMonthRelation()`    | Adds an OR condition to filter related model’s date column by month.                                                      |
+| `whereYearRelation()`       | Filters related model’s date column by year.                                                                              |
+| `orWhereYearRelation()`     | Adds an OR condition to filter related model’s date column by year.                                                       |
+| `whereHasRelation()`        | Filters models where a relation exists and meets a condition (shorthand for nested where on relations).                   |
+| `orWhereHasRelation()`      | Adds an OR version of `whereHasRelation()`.                                                                               |
+| `whereDoesntHaveRelation()` | Filters models where the relation doesn’t exist or doesn’t meet the condition.                                            |
+| `orWhereDoesntHaveRelation()`| Adds an OR version of `whereDoesntHaveRelation()`.                                                                       |
 
 <hr>
 

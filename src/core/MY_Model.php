@@ -477,6 +477,19 @@ class MY_Model extends CI_Model
         return $this;
     }
 
+    public function when($condition, \Closure $callback, \Closure $default = null)
+    {
+        if ($condition) {
+            return $callback($this, $condition) ?: $this;
+        }
+
+        if ($default) {
+            return $default($this, $condition) ?: $this;
+        }
+
+        return $this;
+    }
+
     /**
      * Execute a raw SQL query
      *
@@ -895,7 +908,7 @@ class MY_Model extends CI_Model
             $this->_paginateColumn = $originalState['_paginateColumn'] ?? [];
             $this->_indexString = $originalState['index'] ?? null;
             $this->_indexType = $originalState['indexType'] ?? 'USE INDEX';
-            
+
             // Log query execution start time
             $startTime = microtime(true);
 
@@ -2249,19 +2262,24 @@ class MY_Model extends CI_Model
         return $this;
     }
 
-    private function _cloneDatabaseSettings()
+    /**
+     * Clone database settings for a clean state
+     * 
+     * @return array
+     */
+    protected function _cloneDatabaseSettings()
     {
         return [
+            'db' => $this->_database,
             'connection' => $this->connection,
             'table' => $this->table,
             'primaryKey' => $this->primaryKey,
-            'relations' => $this->relations,
-            'eagerLoad' => $this->eagerLoad,
+            'relations' => $this->relations ?? [],
+            'eagerLoad' => $this->eagerLoad ?? [],
             'returnType' => $this->returnType,
-            '_paginateColumn' => $this->_paginateColumn,
-            'index' => $this->_indexString,
-            'indexType' => $this->_indexType,
-            'db' => clone $this->_database
+            '_paginateColumn' => $this->_paginateColumn ?? [],
+            'index' => $this->_indexString ?? null,
+            'indexType' => $this->_indexType ?? 'USE INDEX'
         ];
     }
 
