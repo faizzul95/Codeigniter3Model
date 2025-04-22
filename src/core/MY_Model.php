@@ -110,40 +110,51 @@ class MY_Model extends CI_Model
     }
 
     /**
-     * Select columns for the query
+     * Select columns for the query (safe, Laravel-style)
      *
-     * @param string $columns Columns to select
+     * @param string|array $columns Columns to select
      * @return $this
      */
-    public function select($columns = '*')
+    public function select($columns = ['*'])
     {
-        // Supported aggregate functions
-        $aggregateFunctions = '/\b(SUM|MAX|MIN|AVG|DISTINCT|COUNT|GROUP_CONCAT|STDDEV|VARIANCE|FIRST|LAST|BIT_AND|BIT_OR|BIT_XOR|JSON_ARRAYAGG|JSON_OBJECTAGG|GROUPING|CHECKSUM_AGG|MEDIAN|PERCENTILE_CONT|PERCENTILE_DISC|CUME_DIST|DENSE_RANK|RANK|ROW_NUMBER|NTILE|MODE|STDEV|STDEVP|VAR|VARP|COLLECT_SET|COLLECT_LIST|APPROX_COUNT_DISTINCT|LISTAGG|CORR|COVAR_POP|COVAR_SAMP|REGR_SLOPE|REGR_INTERCEPT|REGR_COUNT|REGR_R2|REGR_AVGX|REGR_AVGY)\b/i';
-
-        // Handle column selection
-        if (is_array($columns)) {
-            $columns = array_map(function ($column) use ($aggregateFunctions) {
-                // Skip prefixing for aggregate functions, columns with table prefix, and columns with "AS"
-                if (preg_match($aggregateFunctions, strtoupper($column)) || strpos($column, '.') !== false || stripos($column, ' AS ') !== false) {
-                    return $column;
-                }
-                return "{$this->table}.$column";
-            }, $columns);
-            $columns = implode(',', $columns);
-        } else if ($columns !== '*') {
-            $columns = implode(',', array_map(function ($column) use ($aggregateFunctions) {
-                // Trim column and check conditions
-                $column = trim($column);
-                if (preg_match($aggregateFunctions, strtoupper($column)) || strpos($column, '.') !== false || stripos($column, ' AS ') !== false) {
-                    return $column;
-                }
-                return "{$this->table}.$column";
-            }, explode(',', $columns)));
-        } else {
-            $columns = $this->table . '.*';
+        if (!is_array($columns)) {
+            $columns = explode(',', $columns);
         }
 
-        $this->_database->select(trim($columns));
+        $columns = array_map(function ($column) {
+            $column = trim($column);
+            // Skip prefixing for table.column, aliases, or SQL functions
+            if (
+                strpos($column, '.') !== false ||
+                stripos($column, ' as ') !== false ||
+                preg_match('/\w+\s*\(.*\)/i', $column) // handles nested functions like SUM(price * quantity)
+            ) {
+                return $column;
+            }
+            return "{$this->table}.{$column}";
+        }, $columns);
+
+        $this->_database->select(implode(', ', $columns));
+        return $this;
+    }
+
+    /**
+     * Select raw expression for the query (Laravel-style)
+     *
+     * @param string $expression Raw SQL string with optional bindings (?)
+     * @param array $bindings Bindings to safely escape
+     * @return $this
+     */
+    public function selectRaw($expression, array $bindings = [])
+    {
+        // If bindings are provided, bind them safely using CodeIgniter's built-in methods
+        if (!empty($bindings)) {
+            $expression = vsprintf(str_replace('?', '%s', $expression), array_map(function ($value) {
+                return $this->_database->escape(trim($value));
+            }, $bindings));
+        }
+
+        $this->_database->select($expression, false); // false disables escaping
         return $this;
     }
 
@@ -2725,35 +2736,81 @@ class MY_Model extends CI_Model
         return $this;
     }
 
+    /**
+     * Log performance, execution time, and suggest CREATE INDEX
+     *
+     * @param string $query
+     * @return void
+     */
     private function _logQueryPerformance($query)
     {
-        if (!$this->debug) {
+        if (!$this->debug || stripos(trim($query), 'SELECT') !== 0) {
             return;
         }
 
-        // Run EXPLAIN on the query
+        $startTime = microtime(true);
+        $startMemory = memory_get_usage();
+
         try {
-            $explainResults = (clone $this->_database)->query("EXPLAIN $query")->result_array();
+            $explainQuery = "EXPLAIN $query";
+            $explainResults = (clone $this->_database)->query($explainQuery)->result_array();
 
-            $tableScans = array_filter($explainResults, function ($row) {
-                return isset($row['type']) && $row['type'] === 'ALL';
-            });
+            $executionTime = round((microtime(true) - $startTime) * 1000, 2); // in milliseconds
+            $memoryUsage = round((memory_get_usage() - $startMemory) / 1024, 2); // in KB
 
-            $inefficientIndexes = array_filter($explainResults, function ($row) {
-                return (isset($row['key']) && !empty($row['key'])) && // Using an index
-                    (isset($row['rows']) && $row['rows'] > 5000);  // But still scanning many rows
-            });
+            $fullScans = [];
+            $inefficientIndexes = [];
+            $indexSuggestions = [];
 
-            if (!empty($tableScans)) {
-                log_message('warning', 'FULL TABLE SCAN detected: ' . json_encode($tableScans, JSON_PRETTY_PRINT));
-                log_message('warning', 'Query causing full table scan: ' . $query);
+            foreach ($explainResults as $row) {
+                $table = $row['table'] ?? null;
+                $type = $row['type'] ?? '';
+                $rows = (int) ($row['rows'] ?? 0);
+                $key = $row['key'] ?? null;
+                $possibleKeys = $row['possible_keys'] ?? null;
+                $extra = strtolower($row['Extra'] ?? '');
+
+                if (!$table) continue;
+
+                // FULL TABLE SCAN
+                if (strtoupper($type) === 'ALL') {
+                    $fullScans[] = $row;
+
+                    if (!empty($possibleKeys)) {
+                        foreach (explode(',', $possibleKeys) as $k) {
+                            $indexSuggestions[] = "CREATE INDEX idx_{$table}_" . trim($k) . " ON `$table`(" . trim($k) . ");";
+                        }
+                    } elseif (strpos($extra, 'using where') !== false) {
+                        $indexSuggestions[] = "Table `$table` performs full scan with WHERE clause — consider indexing WHERE fields.";
+                    } else {
+                        $indexSuggestions[] = "Table `$table` has no suggested indexes. Review WHERE/JOIN columns for indexing.";
+                    }
+                }
+
+                // INEFFICIENT INDEX
+                if (!empty($key) && $rows > 5000) {
+                    $inefficientIndexes[] = $row;
+                    $indexSuggestions[] = "Table `$table` scans $rows rows using `$key` — refine or create covering index.";
+                }
+            }
+
+            // Logging
+            if (!empty($fullScans)) {
+                log_message('warning', "FULL TABLE SCAN:\n" . json_encode($fullScans, JSON_PRETTY_PRINT));
+                log_message('warning', "Query:\n" . $query);
             }
 
             if (!empty($inefficientIndexes)) {
-                log_message('warning', 'Inefficient index usage detected: ' . json_encode($inefficientIndexes, JSON_PRETTY_PRINT));
+                log_message('warning', "INEFFICIENT INDEX USAGE:\n" . json_encode($inefficientIndexes, JSON_PRETTY_PRINT));
             }
+
+            if (!empty($indexSuggestions)) {
+                log_message('debug', "CREATE INDEX Suggestions:\n" . implode("\n", array_unique($indexSuggestions)));
+            }
+
+            log_message('debug', "Query Performance: Time = {$executionTime}ms | Memory = {$memoryUsage}KB");
         } catch (Exception $e) {
-            log_message('error', 'Failed to analyze query performance: ' . $e->getMessage());
+            log_message('error', 'Query performance analysis failed: ' . $e->getMessage());
         }
     }
 
@@ -2795,74 +2852,67 @@ class MY_Model extends CI_Model
     }
 
     /**
-     * Enable safe output against XSS injection with exception key
+     * Enable safe output against XSS injection with exception keys
      *
-     * @param array $exception The key array that will be except from sanitize
+     * @param array $exceptions Keys to exclude from sanitization
      * @return $this
      */
-    public function safeOutputWithException($exception = [])
+    public function safeOutputWithException(array $exceptions = [])
     {
         $this->_secureOutput = true;
-        $this->_secureOutputException = $exception;
+        $this->_secureOutputException = array_map('strval', $exceptions);
         return $this;
     }
 
+    /**
+     * Sanitize output data
+     *
+     * @param mixed $data
+     * @return mixed
+     */
     private function _safeOutputSanitize($data)
     {
-        if (!$this->_secureOutput) {
-            return $data;
-        }
-
-        // Early return if data is null or empty
-        if (is_null($data) || $data === '') {
+        if (!$this->_secureOutput || $data === null || $data === '') {
             return $data;
         }
 
         return $this->sanitize($data);
     }
 
-    private function sanitize($value = null)
+    /**
+     * Recursively sanitize values
+     *
+     * @param mixed $value
+     * @param string|null $key Current key for exceptions
+     * @return mixed
+     */
+    private function sanitize($value, $key = null)
     {
-        // Check if $value is not null or empty
-        if (!isset($value) || is_null($value)) {
+        if ($key !== null && in_array($key, $this->_secureOutputException, true)) {
             return $value;
         }
 
-        // If $value is an array, sanitize its values while checking each key against the exception list
         if (is_array($value)) {
-            if (!empty($this->_secureOutputException)) {
-                foreach ($value as $key => $item) {
-                    // Check if the key exists in the exception list
-                    if (in_array($key, $this->_secureOutputException)) {
-                        continue; // Skip sanitization for this key
-                    }
-
-                    // Recursively sanitize the value for this key
-                    $value[$key] = $this->sanitize($item);
-                }
-
-                return $value;
-            } else {
-                return array_map([$this, 'sanitize'], $value);
+            $sanitized = [];
+            foreach ($value as $k => $v) {
+                $sanitized[$k] = $this->sanitize($v, $k);
             }
+            return $sanitized;
         }
 
-        // Sanitize input based on data type
         switch (gettype($value)) {
             case 'string':
-                if (isset($this->_secureOutputException) && in_array($value, $this->_secureOutputException)) {
-                    return $value; // Skip sanitization if the string is in the exception list
-                }
-                return htmlspecialchars(trim($value), ENT_QUOTES, 'UTF-8'); // Apply XSS protection and trim
+                return htmlspecialchars(trim($value), ENT_QUOTES | ENT_HTML5, 'UTF-8');
             case 'integer':
                 return filter_var($value, FILTER_SANITIZE_NUMBER_INT);
             case 'double':
                 return filter_var($value, FILTER_SANITIZE_NUMBER_FLOAT, FILTER_FLAG_ALLOW_FRACTION);
             case 'boolean':
                 return (bool) $value;
+            case 'NULL':
+                return null;
             default:
-                // Handle unexpected data types (consider throwing an exception)
-                throw new \InvalidArgumentException("Unsupported data type for sanitization: " . gettype($value));
+                return $value;
         }
     }
 

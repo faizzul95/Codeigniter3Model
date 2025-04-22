@@ -723,9 +723,10 @@ For bugs and feature requests, please use the [GitHub Issues](https://github.com
 
 | Function        | Description                                                                                                                                       |
 |-----------------|---------------------------------------------------------------------------------------------------------------------------------------------------|
-| `rawQuery()`    | Execute raw SQL queries directly. Useful for complex queries not supported by active record.                                                      |
+| `rawQuery()`    | Execute raw SQL queries directly. Useful for complex queries not supported by the query builder.                                                  |
 | `table()`       | Specifies the database table for the query.                                                                                                       |
-| `select()`      | Defines the columns to retrieve in a query. Similar to CodeIgniter’s `select()`.                                                                  |
+| `select()`      | Defines the columns to retrieve, with auto-prefixing, intelligent formatting, and safety against SQL injection. Similar to Laravel’s select().    |
+| `selectRaw()`   | Defines raw SQL columns or expressions for selection. Use this for advanced use cases like aggregates, functions, and subqueries.                 |
 | `where()`       | Adds a basic WHERE clause to the query. Similar to Laravel's `where()`.                                                                           |
 | `orWhere()`     | Adds an OR WHERE clause. Similar to Laravel's `orWhere()`.                                                                                        |
 | `whereNull()`   | Adds a WHERE clause to check for `NULL` values. Similar to Laravel's `whereNull()`.                                                               |

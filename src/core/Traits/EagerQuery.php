@@ -687,7 +687,20 @@ trait EagerQuery
                 $constraints = null;
             }
 
-            $this->eagerLoad[$name] = $constraints;
+
+            $columns = null;
+            if (is_string($name) && strpos($name, ':') !== false) {
+                list($name, $columnString) = explode(':', $name, 2);
+                $name = trim($name);
+                if (!empty($columnString)) {
+                    $columns = array_map('trim', explode(',', $columnString));
+                }
+            }
+
+            $this->eagerLoad[$name] = [
+                'constraints' => $constraints,
+                'columns' => $columns
+            ];
         }
 
         return $this;
@@ -814,15 +827,18 @@ trait EagerQuery
             return $results;
         }
 
-        foreach ($this->eagerLoad as $relation => $constraints) {
+        foreach ($this->eagerLoad as $relation => $config) {
             $relations = explode('.', $relation);
-            $this->loadNestedRelation($this, $results, $relations, $constraints);
+            $constraints = is_array($config) ? ($config['constraints'] ?? null) : $config;
+            $columns = is_array($config) ? ($config['columns'] ?? null) : null;
+
+            $this->loadNestedRelation($this, $results, $relations, $constraints, $columns);
         }
 
         return $results;
     }
 
-    private function loadNestedRelation($currentInstance, &$results, $relations, $constraints = null)
+    private function loadNestedRelation($currentInstance, &$results, $relations, $constraints = null, $columns = null)
     {
         try {
             if (count($relations) == 1) {
@@ -856,8 +872,31 @@ trait EagerQuery
 
                     $relationInstance = $this->{$modelName};
 
+                    // Apply constraint callback if provided
                     if ($constraints instanceof \Closure) {
                         $constraints($relationInstance);
+                    }
+
+                    // Apply column selection if provided
+                    if (!empty($columns)) {
+                        // Always include the foreign key and primary key for proper relationship mapping
+                        $relationPrimaryKey = $relationInstance->primaryKey;
+                        $requiredColumns = [$relationPrimaryKey];
+
+                        // Add foreign key or owner key based on relation type
+                        switch ($relationType) {
+                            case 'hasMany':
+                            case 'hasOne':
+                                $requiredColumns[] = $foreignKey;
+                                break;
+                            case 'belongsTo':
+                                $requiredColumns[] = $rels['ownerKey'];
+                                break;
+                        }
+
+                        // Merge with requested columns, ensuring we include required keys
+                        $selectedColumns = array_unique(array_merge($columns, $requiredColumns));
+                        $relationInstance->select($relationInstance->table . '.' . implode(', ' . $relationInstance->table . '.', $selectedColumns));
                     }
 
                     switch ($relationType) {
