@@ -1,9 +1,10 @@
 <?php
 
-defined('BASEPATH') or exit('No direct script access allowed');
+namespace OnlyPHP\Codeigniter3Model;
 
-use App\core\Traits\EagerQuery;
-use App\core\Traits\PaginateQuery;
+use OnlyPHP\Codeigniter3Model\LazyCollection;
+use OnlyPHP\Codeigniter3Model\Traits\EagerQuery;
+use OnlyPHP\Codeigniter3Model\Traits\PaginateQuery;
 
 /**
  * MY_Model Class
@@ -14,7 +15,7 @@ use App\core\Traits\PaginateQuery;
  * @link      https://github.com/faizzul95/MY_Model
  */
 
-class MY_Model extends CI_Model
+class CI3_Model extends \CI_Model
 {
     use EagerQuery, PaginateQuery;
 
@@ -89,9 +90,12 @@ class MY_Model extends CI_Model
     protected $_indexType = 'USE INDEX';
     protected $_suggestIndexEnabled = false;
 
+    private $ci;
+
     public function __construct()
     {
-        $this->db = $this->load->database($this->connection, TRUE);
+        $this->ci = &get_instance();
+        $this->db = $this->ci->load->database($this->connection, TRUE);
         $this->_set_connection();
         $this->_set_timezone();
         $this->_fetch_table();
@@ -169,7 +173,7 @@ class MY_Model extends CI_Model
     public function where($column, $operator = null, $value = null)
     {
         // If it's a Closure, we'll handle it separately
-        if ($column instanceof Closure) {
+        if ($column instanceof \Closure) {
             return $this->whereNested($column);
         }
 
@@ -202,7 +206,7 @@ class MY_Model extends CI_Model
     public function orWhere($column, $operator = null, $value = null)
     {
         // If it's a Closure, we'll handle it separately
-        if ($column instanceof Closure) {
+        if ($column instanceof \Closure) {
             return $this->whereNested($column);
         }
 
@@ -248,28 +252,28 @@ class MY_Model extends CI_Model
         return $this;
     }
 
-    public function whereExists(Closure $callback)
+    public function whereExists(\Closure $callback)
     {
         $subQuery = $this->forSubQuery($callback);
         $this->_database->where("EXISTS ($subQuery)", NULL, FALSE);
         return $this;
     }
 
-    public function orWhereExists(Closure $callback)
+    public function orWhereExists(\Closure $callback)
     {
         $subQuery = $this->forSubQuery($callback);
         $this->_database->or_where("EXISTS ($subQuery)", NULL, FALSE);
         return $this;
     }
 
-    public function whereNotExists(Closure $callback)
+    public function whereNotExists(\Closure $callback)
     {
         $subQuery = $this->forSubQuery($callback);
         $this->_database->where("NOT EXISTS ($subQuery)", NULL, FALSE);
         return $this;
     }
 
-    public function orWhereNotExists(Closure $callback)
+    public function orWhereNotExists(\Closure $callback)
     {
         $subQuery = $this->forSubQuery($callback);
         $this->_database->or_where("NOT EXISTS ($subQuery)", NULL, FALSE);
@@ -602,7 +606,7 @@ class MY_Model extends CI_Model
     {
         try {
             if (empty($key) && !is_callable($key)) {
-                throw new Exception('The key or callback is required.');
+                throw new \Exception('The key or callback is required.');
             }
 
             $results = $this->get();
@@ -641,7 +645,7 @@ class MY_Model extends CI_Model
             }
 
             return $sortedResults;
-        } catch (Exception $e) {
+        } catch (\Exception $e) {
             if ($this->debug) log_message('error', 'sortBy error: ' . $e->getMessage());
             throw $e; // Re-throw the exception after cleanup
         }
@@ -657,11 +661,11 @@ class MY_Model extends CI_Model
     {
         try {
             if (empty($criteria)) {
-                throw new Exception('Sorting criteria are required.');
+                throw new \Exception('Sorting criteria are required.');
             }
 
             if (!is_array($criteria)) {
-                throw new Exception('Sorting criteria are required as array.');
+                throw new \Exception('Sorting criteria are required as array.');
             }
 
             $results = $this->get();
@@ -671,7 +675,7 @@ class MY_Model extends CI_Model
             }
 
             return $this->_multiSort($results, $criteria);
-        } catch (Exception $e) {
+        } catch (\Exception $e) {
             if ($this->debug) log_message('error', 'sortByMultiple error: ' . $e->getMessage());
             throw $e;
         }
@@ -883,9 +887,9 @@ class MY_Model extends CI_Model
             if (function_exists('gc_collect_cycles')) gc_collect_cycles();
 
             return $collection;
-        } catch (Exception $e) {
+        } catch (\Exception $e) {
             if ($this->debug) log_message('error', 'LazyCollection error: ' . $e->getMessage());
-            throw new Exception('Failed to create lazy collection: ' . $e->getMessage(), 0, $e);
+            throw new \Exception('Failed to create lazy collection: ' . $e->getMessage(), 0, $e);
         }
     }
 
@@ -1064,7 +1068,7 @@ class MY_Model extends CI_Model
     {
         try {
             if (empty($column)) {
-                throw new Exception('The column key is required.');
+                throw new \Exception('The column key is required.');
             }
 
             $results = $this->get();
@@ -1093,7 +1097,7 @@ class MY_Model extends CI_Model
             }
 
             return $values;
-        } catch (Exception $e) {
+        } catch (\Exception $e) {
             if ($this->debug) log_message('error', 'Pluck error: ' . $e->getMessage());
             throw $e; // Re-throw the exception after cleanup
         }
@@ -1124,7 +1128,7 @@ class MY_Model extends CI_Model
             if (func_num_args() > 1 && !is_callable($key)) {
                 $validOperators = ['=', '==', '===', '!=', '!==', '<', '>', '<=', '>=', '<>'];
                 if (!in_array($operator, $validOperators)) {
-                    throw new Exception('Invalid operator. Supported operators: =, ==, ===, !=, !==, <, >, <=, >=, <>');
+                    throw new \Exception('Invalid operator. Supported operators: =, ==, ===, !=, !==, <, >, <=, >=, <>');
                 }
             }
 
@@ -1191,7 +1195,7 @@ class MY_Model extends CI_Model
             }
 
             return false;
-        } catch (Exception $e) {
+        } catch (\Exception $e) {
             if ($this->debug) log_message('error', 'contains error: ' . $e->getMessage());
             throw $e; // Re-throw the exception after cleanup
         }
@@ -1237,7 +1241,7 @@ class MY_Model extends CI_Model
             $this->resetQuery();
 
             return $formattedResult;
-        } catch (Exception $e) {
+        } catch (\Exception $e) {
             throw $e; // Re-throw the exception after cleanup
         }
     }
@@ -1282,7 +1286,7 @@ class MY_Model extends CI_Model
             $this->resetQuery();
 
             return $formattedResult;
-        } catch (Exception $e) {
+        } catch (\Exception $e) {
             throw $e; // Re-throw the exception after cleanup
         }
     }
@@ -1358,7 +1362,7 @@ class MY_Model extends CI_Model
     public function setValidationRules($validation)
     {
         if (!is_array($validation)) {
-            throw new Exception('Validation rules must be an array.');
+            throw new \Exception('Validation rules must be an array.');
         }
 
         $this->_overrideValidation = $validation;
@@ -1374,11 +1378,11 @@ class MY_Model extends CI_Model
     public function setCustomValidationRules($validation)
     {
         if (!is_array($validation)) {
-            throw new Exception('Additional validation rules must be an array.');
+            throw new \Exception('Additional validation rules must be an array.');
         }
 
         if (empty($this->_validationRules) && empty($this->_insertValidation) && empty($this->_updateValidation)) {
-            throw new Exception('No validation rules found. Please set the validation in model first.');
+            throw new \Exception('No validation rules found. Please set the validation in model first.');
         }
 
         $this->_validationCustomize = $validation;
@@ -1395,7 +1399,7 @@ class MY_Model extends CI_Model
     public function setCreateValidationRules($validation, $updateRules = false)
     {
         if (!is_array($validation)) {
-            throw new Exception('Custom create/insert validation rules must be an array.');
+            throw new \Exception('Custom create/insert validation rules must be an array.');
         }
 
         if ($updateRules) {
@@ -1418,7 +1422,7 @@ class MY_Model extends CI_Model
     public function setPatchValidationRules($validation, $updateRules = false)
     {
         if (!is_array($validation)) {
-            throw new Exception('Custom patch/update validation rules must be an array.');
+            throw new \Exception('Custom patch/update validation rules must be an array.');
         }
 
         if ($updateRules) {
@@ -1442,7 +1446,7 @@ class MY_Model extends CI_Model
     {
         try {
             if ($this->_isMultidimensional($values)) {
-                throw new Exception('This insertOrUpdate method is not designed for batch operations.');
+                throw new \Exception('This insertOrUpdate method is not designed for batch operations.');
             }
 
             // Merge $attributes and $values
@@ -1458,7 +1462,7 @@ class MY_Model extends CI_Model
 
             // If record doesn't exist, create it
             return $this->create($data);
-        } catch (Exception $e) {
+        } catch (\Exception $e) {
             if ($this->debug) log_message('error', 'insertOrUpdate error: ' . $e->getMessage());
             return [
                 'code' => 422,
@@ -1479,11 +1483,11 @@ class MY_Model extends CI_Model
     {
         try {
             if (empty($data)) {
-                throw new Exception('Please provide data to insert.');
+                throw new \Exception('Please provide data to insert.');
             }
 
             if ($this->_isMultidimensional($data)) {
-                throw new Exception('This create method is not designed for batch operations. Please use batchCreate() for batch inserts.');
+                throw new \Exception('This create method is not designed for batch operations. Please use batchCreate() for batch inserts.');
             }
 
             $data = $this->filterData($data);
@@ -1499,7 +1503,7 @@ class MY_Model extends CI_Model
                 $success = $this->_database->insert($this->table, $data);
 
                 if (!is_array($success) && !$success) {
-                    throw new Exception('Failed to insert record');
+                    throw new \Exception('Failed to insert record');
                 }
 
                 $insertId = is_array($success) && isset($success['id']) ? $success['id'] : $this->_database->insert_id();
@@ -1516,7 +1520,7 @@ class MY_Model extends CI_Model
             } else {
                 return $this->_validationError;
             }
-        } catch (Exception $e) {
+        } catch (\Exception $e) {
             if ($this->debug) log_message('error', 'Create error: ' . $e->getMessage());
             return [
                 'code' => 500,
@@ -1538,11 +1542,11 @@ class MY_Model extends CI_Model
         try {
 
             if (empty($data)) {
-                throw new Exception('Please provide data to insert.');
+                throw new \Exception('Please provide data to insert.');
             }
 
             if (!$this->_isMultidimensional($data)) {
-                throw new Exception('This batchCreate method is designed for batch operations. Please use create() for single insert operation.');
+                throw new \Exception('This batchCreate method is designed for batch operations. Please use create() for single insert operation.');
             }
 
             $validationRules = !empty($this->_insertValidation) ? $this->_insertValidation : $this->_validationRules;
@@ -1563,7 +1567,7 @@ class MY_Model extends CI_Model
             }
 
             if (empty($batchData)) {
-                throw new Exception('No records to insert.');
+                throw new \Exception('No records to insert.');
             }
 
             $this->_database->trans_begin(); // Begin a transaction
@@ -1572,7 +1576,7 @@ class MY_Model extends CI_Model
             $success = $this->_database->insert_batch($this->table, $batchData);
 
             if (!$success || $this->_database->trans_status() === FALSE) {
-                throw new Exception('Failed to insert records');
+                throw new \Exception('Failed to insert records');
             }
 
             $lastInsertId = $this->_database->insert_id();
@@ -1587,7 +1591,7 @@ class MY_Model extends CI_Model
                 'message' => 'Batch creation successful',
                 'action' => 'create'
             ];
-        } catch (Exception $e) {
+        } catch (\Exception $e) {
             $this->_database->trans_rollback();
             if ($this->debug) log_message('error', "Batch creation error in table {$this->table}: " . $e->getMessage());
             return [
@@ -1610,11 +1614,11 @@ class MY_Model extends CI_Model
     {
         try {
             if (empty($data)) {
-                throw new Exception('Please provide data to update.');
+                throw new \Exception('Please provide data to update.');
             }
 
             if ($this->_isMultidimensional($data)) {
-                throw new Exception('This method is not designed for batch operations. Please use batchPatch() for batch updates.');
+                throw new \Exception('This method is not designed for batch operations. Please use batchPatch() for batch updates.');
             }
 
             $data = $this->filterData($data);
@@ -1623,7 +1627,7 @@ class MY_Model extends CI_Model
             if ($this->_runValidation($data, $validationRules, 'update')) {
 
                 if (is_null($id)) {
-                    throw new Exception('Please provide id to update.');
+                    throw new \Exception('Please provide id to update.');
                 }
 
                 if ($this->timestamps) {
@@ -1634,7 +1638,7 @@ class MY_Model extends CI_Model
                 $success = $this->_database->where($this->primaryKey, $id)->update($this->table, $data);
 
                 if (!$success) {
-                    throw new Exception('Failed to update record');
+                    throw new \Exception('Failed to update record');
                 }
 
                 $this->resetQuery();
@@ -1649,7 +1653,7 @@ class MY_Model extends CI_Model
             } else {
                 return $this->_validationError;
             }
-        } catch (Exception $e) {
+        } catch (\Exception $e) {
             if ($this->debug) log_message('error', "Update error for id ({$id}) in table {$this->table}: "  . $e->getMessage());
             return [
                 'code' => 422,
@@ -1672,7 +1676,7 @@ class MY_Model extends CI_Model
             $dataQuery = $this->get();
 
             if (!$dataQuery) {
-                throw new Exception('No record found');
+                throw new \Exception('No record found');
             }
 
             $updateData = [];
@@ -1682,7 +1686,7 @@ class MY_Model extends CI_Model
             }
 
             return $this->batchPatch($updateData, $this->primaryKey);
-        } catch (Exception $e) {
+        } catch (\Exception $e) {
             if ($this->debug) log_message('error', "Update error for patchAll: "  . $e->getMessage());
             return [
                 'code' => 422,
@@ -1705,11 +1709,11 @@ class MY_Model extends CI_Model
         try {
 
             if (empty($data)) {
-                throw new Exception('Please provide data to update.');
+                throw new \Exception('Please provide data to update.');
             }
 
             if (!$this->_isMultidimensional($data)) {
-                throw new Exception('This method is designed for batch operations. Please use patch() for single update operation.');
+                throw new \Exception('This method is designed for batch operations. Please use patch() for single update operation.');
             }
 
             $validationRules = !empty($this->_updateValidation) ? $this->_updateValidation : $this->_validationRules;
@@ -1737,7 +1741,7 @@ class MY_Model extends CI_Model
             }
 
             if (empty($batchData)) {
-                throw new Exception('No records to update.');
+                throw new \Exception('No records to update.');
             }
 
             $this->_database->trans_begin(); // Begin a transaction
@@ -1746,7 +1750,7 @@ class MY_Model extends CI_Model
             $success = $this->_database->update_batch($this->table, $batchData, $keyColumn);
 
             if (!$success || $this->_database->trans_status() === FALSE) {
-                throw new Exception('Failed to update records');
+                throw new \Exception('Failed to update records');
             }
 
             $this->_database->trans_commit();
@@ -1759,7 +1763,7 @@ class MY_Model extends CI_Model
                 'message' => 'Updated successfully',
                 'action' => 'update'
             ];
-        } catch (Exception $e) {
+        } catch (\Exception $e) {
             $this->_database->trans_rollback(); // Rollback the transaction
             if ($this->debug) log_message('error', "Batch update error in table {$this->table}: " . $e->getMessage());
             return [
@@ -1781,13 +1785,13 @@ class MY_Model extends CI_Model
     {
         try {
             if (empty($id)) {
-                throw new Exception('Please provide id to delete.');
+                throw new \Exception('Please provide id to delete.');
             }
 
             $data = $this->withTrashed()->find($id);
 
             if (!$data) {
-                throw new Exception('Records not found');
+                throw new \Exception('Records not found');
             }
 
             if ($this->softDelete) {
@@ -1804,7 +1808,7 @@ class MY_Model extends CI_Model
             $this->resetQuery();
 
             if (!$success) {
-                throw new Exception('Failed to delete record');
+                throw new \Exception('Failed to delete record');
             }
 
             return [
@@ -1814,7 +1818,7 @@ class MY_Model extends CI_Model
                 'message' => 'Removed successfully',
                 'action' => 'delete'
             ];
-        } catch (Exception $e) {
+        } catch (\Exception $e) {
             if ($this->debug) log_message('error', "Delete error for id ({$id}) in table {$this->table}: " . $e->getMessage());
             return [
                 'code' => 422,
@@ -1837,7 +1841,7 @@ class MY_Model extends CI_Model
             $data = (clone $this)->withTrashed()->get();
 
             if (!$data) {
-                throw new Exception('Records not found');
+                throw new \Exception('Records not found');
             }
 
             if ($this->softDelete) {
@@ -1850,7 +1854,7 @@ class MY_Model extends CI_Model
             $this->resetQuery();
 
             if (!$success) {
-                throw new Exception('Failed to delete record');
+                throw new \Exception('Failed to delete record');
             }
 
             return [
@@ -1860,7 +1864,7 @@ class MY_Model extends CI_Model
                 'message' => 'Removed successfully',
                 'action' => 'delete'
             ];
-        } catch (Exception $e) {
+        } catch (\Exception $e) {
             if ($this->debug) log_message('error', "Delete error for multi data in table {$this->table}: " . $e->getMessage());
             return [
                 'code' => 422,
@@ -1883,7 +1887,7 @@ class MY_Model extends CI_Model
             $data = $this->withTrashed()->find($id);
 
             if (!$data) {
-                throw new Exception('Records not found');
+                throw new \Exception('Records not found');
             }
 
             $success = $this->_database->delete($this->table, [$this->primaryKey => $id]);
@@ -1891,7 +1895,7 @@ class MY_Model extends CI_Model
             $this->resetQuery();
 
             if (!$success) {
-                throw new Exception('Failed to force delete record');
+                throw new \Exception('Failed to force delete record');
             }
 
             return [
@@ -1901,7 +1905,7 @@ class MY_Model extends CI_Model
                 'message' => 'Removed successfully',
                 'action' => 'delete',
             ];
-        } catch (Exception $e) {
+        } catch (\Exception $e) {
             if ($this->debug) log_message('error', 'Force Delete Error: ' . $e->getMessage());
             return [
                 'code' => 422,
@@ -1924,7 +1928,7 @@ class MY_Model extends CI_Model
             $data = $this->onlyTrashed()->find($id);
 
             if (!$data) {
-                throw new Exception('Records not found');
+                throw new \Exception('Records not found');
             }
 
             $success = $this->_database->where($this->primaryKey, $id)->update($this->table, [$this->deleted_at => NULL]);
@@ -1932,7 +1936,7 @@ class MY_Model extends CI_Model
             $this->resetQuery();
 
             if (!$success) {
-                throw new Exception('Failed to restore record with id : ' . $id);
+                throw new \Exception('Failed to restore record with id : ' . $id);
             }
 
             return [
@@ -1942,7 +1946,7 @@ class MY_Model extends CI_Model
                 'message' => 'Restore successfully',
                 'action' => 'restore',
             ];
-        } catch (Exception $e) {
+        } catch (\Exception $e) {
             if ($this->debug) log_message('error', 'Restore Error: ' . $e->getMessage());
             return [
                 'code' => 422,
@@ -2011,10 +2015,10 @@ class MY_Model extends CI_Model
 
                 if (!empty($filteredValidation)) {
                     // Load the form validation library
-                    $this->load->library('form_validation');
+                    $this->ci->load->library('form_validation');
 
                     // Reset validation to clear previous rules and data
-                    $this->form_validation->reset_validation();
+                    $this->ci->form_validation->reset_validation();
 
                     // Set language if _validationLang is set
                     if (!empty($this->_validationLang) && !in_array(strtolower($this->_validationLang), ['english', 'en'])) {
@@ -2025,21 +2029,21 @@ class MY_Model extends CI_Model
 
                         if (file_exists($langFile)) {
                             $this->lang->load('form_validation', $langCode);
-                            $this->form_validation->set_message($this->lang->language);
+                            $this->ci->form_validation->set_message($this->lang->language);
                         } else {
                             log_message('error', 'Language file not found: ' . $langFile);
                         }
                     }
 
                     // Set the data to be validated
-                    $this->form_validation->set_data($data);
+                    $this->ci->form_validation->set_data($data);
 
                     // Set the filtered validation rules
-                    $this->form_validation->set_rules($filteredValidation);
+                    $this->ci->form_validation->set_rules($filteredValidation);
 
                     // Run validation and return errors if any
-                    if (!$this->form_validation->run()) {
-                        $errors = $this->form_validation->error_array(); // This returns an associative array of errors
+                    if (!$this->ci->form_validation->run()) {
+                        $errors = $this->ci->form_validation->error_array(); // This returns an associative array of errors
 
                         // Build the unordered list
                         $errorsList = "<ul>";
@@ -2164,7 +2168,7 @@ class MY_Model extends CI_Model
      */
     private function _set_connection()
     {
-        $this->_database = $this->load->database($this->connection, TRUE);
+        $this->_database = $this->ci->load->database($this->connection, TRUE);
     }
 
     # HELPER SECTION
@@ -2231,7 +2235,7 @@ class MY_Model extends CI_Model
     private function _get_table_name($model_name)
     {
         // Load helper for string manipulation
-        $this->load->helper('inflector');
+        $this->ci->helper('inflector');
 
         // Remove common suffixes and pluralize the model name
         return plural(preg_replace('/(_m|_model|_mdl|model)?$/', '', strtolower($model_name)));
@@ -2319,7 +2323,7 @@ class MY_Model extends CI_Model
         return $result;
     }
 
-    private function whereNested(Closure $callback)
+    private function whereNested(\Closure $callback)
     {
         $this->_database->group_start();
         $callback($this);
@@ -2327,7 +2331,7 @@ class MY_Model extends CI_Model
         return $this;
     }
 
-    private function forSubQuery(Closure $callback)
+    private function forSubQuery(\Closure $callback)
     {
         $query = $this->_database->from($this->getTableWithIndex());
         $callback($query);
@@ -2365,7 +2369,7 @@ class MY_Model extends CI_Model
         }
 
         if (!$operatorCache[$upperOperator]) {
-            throw new InvalidArgumentException("Invalid operator: $operator");
+            throw new \InvalidArgumentException("Invalid operator: $operator");
         }
 
         switch ($upperOperator) {
@@ -2385,7 +2389,7 @@ class MY_Model extends CI_Model
     {
         $max = $month ? 12 : 31;
         if (!is_numeric($value) || $value < 1 || $value > $max) {
-            throw new InvalidArgumentException("Invalid value for day/month: $value");
+            throw new \InvalidArgumentException("Invalid value for day/month: $value");
         }
     }
 
@@ -2399,7 +2403,7 @@ class MY_Model extends CI_Model
     protected function validateInteger($value, $type, $positive = true)
     {
         if (!is_numeric($value) || ($positive && $value <= 0)) {
-            throw new InvalidArgumentException("Invalid $type value: $value");
+            throw new \InvalidArgumentException("Invalid $type value: $value");
         }
         return (int) $value;
     }
@@ -2809,7 +2813,7 @@ class MY_Model extends CI_Model
             }
 
             log_message('debug', "Query Performance: Time = {$executionTime}ms | Memory = {$memoryUsage}KB");
-        } catch (Exception $e) {
+        } catch (\Exception $e) {
             log_message('error', 'Query performance analysis failed: ' . $e->getMessage());
         }
     }
@@ -3030,392 +3034,5 @@ class MY_Model extends CI_Model
         if (isset($this->_database)) {
             $this->_database = clone $this->_database;
         }
-    }
-}
-
-# LazyCollection Class
-
-/**
- * LazyCollection class for handling large datasets with minimal memory usage
- */
-class LazyCollection implements Iterator, Countable
-{
-    private $source;
-    private $position = 0;
-    private $currentChunk = null;
-    private $chunkSize = 100;
-    private $chunkPosition = 0;
-    private $totalCount = null;
-    private $exhausted = false;
-    private $operations = [];
-    private $currentItems = [];
-
-    /**
-     * Create a new LazyCollection instance
-     * 
-     * @param callable $source The source data generator
-     */
-    public function __construct(callable $source)
-    {
-        $this->source = $source;
-    }
-
-    /**
-     * Get the current item
-     * 
-     * @return mixed
-     */
-    #[\ReturnTypeWillChange]
-    public function current()
-    {
-        $this->loadChunkIfNeeded();
-
-        if (!isset($this->currentItems[$this->position % $this->chunkSize])) {
-            return null;
-        }
-
-        $item = $this->currentItems[$this->position % $this->chunkSize];
-
-        // Apply operations to the item
-        foreach ($this->operations as $operation) {
-            if ($operation['type'] === 'map') {
-                $item = call_user_func($operation['callback'], $item);
-            } elseif ($operation['type'] === 'filter' && !call_user_func($operation['callback'], $item)) {
-                $this->next();
-                return $this->current();
-            }
-        }
-
-        return $item;
-    }
-
-    /**
-     * Get the current position
-     * 
-     * @return int
-     */
-    #[\ReturnTypeWillChange]
-    public function key()
-    {
-        return $this->position;
-    }
-
-    /**
-     * Move to the next item
-     */
-    #[\ReturnTypeWillChange]
-    public function next()
-    {
-        $this->position++;
-    }
-
-    /**
-     * Rewind the collection to the beginning
-     */
-    #[\ReturnTypeWillChange]
-    public function rewind()
-    {
-        $this->position = 0;
-        $this->chunkPosition = 0;
-        $this->currentItems = [];
-        $this->exhausted = false;
-    }
-
-    /**
-     * Check if the current position is valid
-     * 
-     * @return bool
-     */
-    #[\ReturnTypeWillChange]
-    public function valid()
-    {
-        if ($this->exhausted) {
-            return false;
-        }
-
-        $this->loadChunkIfNeeded();
-
-        return isset($this->currentItems[$this->position % $this->chunkSize]);
-    }
-
-    /**
-     * Count elements of the collection
-     * 
-     * @return int
-     */
-    #[\ReturnTypeWillChange]
-    public function count()
-    {
-        if ($this->totalCount === null) {
-            // We need to iterate through all items to get an accurate count for lazy collections
-            $count = 0;
-            foreach ($this as $item) {
-                $count++;
-            }
-            $this->totalCount = $count;
-            $this->rewind(); // Reset the iterator after counting
-        }
-
-        return $this->totalCount;
-    }
-
-    /**
-     * Load the next chunk of data if needed
-     */
-    private function loadChunkIfNeeded()
-    {
-        $currentChunkIndex = floor($this->position / $this->chunkSize);
-
-        if ($currentChunkIndex !== $this->chunkPosition || empty($this->currentItems)) {
-            try {
-                $source = $this->source;
-                $chunk = $source($this->chunkSize, $this->position);
-
-                if (empty($chunk)) {
-                    $this->exhausted = true;
-                    $this->currentItems = [];
-                    return;
-                }
-
-                $this->currentItems = $chunk;
-                $this->chunkPosition = $currentChunkIndex;
-            } catch (Exception $e) {
-                $this->exhausted = true;
-                $this->currentItems = [];
-                throw new Exception("Error loading data chunk: " . $e->getMessage(), 0, $e);
-            }
-        }
-    }
-
-    /**
-     * Execute a callback over each item while maintaining lazy evaluation
-     * 
-     * @param callable $callback
-     * @return LazyCollection
-     */
-    public function map(callable $callback)
-    {
-        $this->operations[] = [
-            'type' => 'map',
-            'callback' => $callback
-        ];
-
-        return $this;
-    }
-
-    /**
-     * Filter items by a given callback while maintaining lazy evaluation
-     * 
-     * @param callable $callback
-     * @return LazyCollection
-     */
-    public function filter(callable $callback)
-    {
-        $this->operations[] = [
-            'type' => 'filter',
-            'callback' => $callback
-        ];
-
-        return $this;
-    }
-
-    /**
-     * Execute a callback over each item
-     * 
-     * @param callable $callback
-     * @return LazyCollection
-     */
-    public function each(callable $callback)
-    {
-        foreach ($this as $key => $item) {
-            if ($callback($item, $key) === false) {
-                break;
-            }
-        }
-
-        return $this;
-    }
-
-    /**
-     * Get all items as an array (caution: loads all data into memory)
-     * 
-     * @return array
-     */
-    public function all()
-    {
-        $results = [];
-
-        foreach ($this as $item) {
-            $results[] = $item;
-        }
-
-        return $results;
-    }
-
-    /**
-     * Get the first item in the collection
-     * 
-     * @param callable|null $callback
-     * @param mixed $default
-     * @return mixed
-     */
-    public function first(callable $callback = null, $default = null)
-    {
-        if ($callback === null) {
-            if ($this->valid()) {
-                return $this->current();
-            }
-
-            return $default;
-        }
-
-        foreach ($this as $item) {
-            if ($callback($item)) {
-                return $item;
-            }
-        }
-
-        return $default;
-    }
-
-    /**
-     * Take the first n items from the collection
-     * 
-     * @param int $limit
-     * @return LazyCollection
-     */
-    public function take($limit)
-    {
-        $self = $this;
-        return new LazyCollection(function ($size, $offset) use ($self, $limit) {
-            if ($offset >= $limit) {
-                return [];
-            }
-
-            $source = $this->source;
-            $items = $source($size, $offset);
-
-            return array_slice($items, 0, min(count($items), $limit - $offset));
-        });
-    }
-
-    /**
-     * Get a value from all items by key
-     * 
-     * @param string $key
-     * @return LazyCollection
-     */
-    public function pluck($key)
-    {
-        return $this->map(function ($item) use ($key) {
-            return is_array($item) ? ($item[$key] ?? null) : (is_object($item) ? ($item->$key ?? null) : null);
-        });
-    }
-
-    /**
-     * Get a specific chunk of items from the collection
-     * 
-     * @param int $size
-     * @return LazyCollection
-     */
-    public function chunk($size)
-    {
-        $chunks = [];
-        $chunk = [];
-        $i = 0;
-
-        foreach ($this as $item) {
-            $chunk[] = $item;
-            $i++;
-
-            if ($i % $size === 0) {
-                $chunks[] = $chunk;
-                $chunk = [];
-            }
-        }
-
-        if (!empty($chunk)) {
-            $chunks[] = $chunk;
-        }
-
-        return new LazyCollection(function () use ($chunks) {
-            return $chunks;
-        });
-    }
-
-    /**
-     * Create a collection of all elements that pass the given truth test
-     * 
-     * @param callable $callback
-     * @return LazyCollection
-     */
-    public function reject(callable $callback)
-    {
-        return $this->filter(function ($item) use ($callback) {
-            return !$callback($item);
-        });
-    }
-
-    /**
-     * Concatenate values of a given key as a string
-     * 
-     * @param string $key
-     * @param string $glue
-     * @return string
-     */
-    public function implode($key, $glue = '')
-    {
-        $result = '';
-        $first = true;
-
-        foreach ($this->pluck($key) as $item) {
-            if (!$first) {
-                $result .= $glue;
-            } else {
-                $first = false;
-            }
-
-            $result .= $item;
-        }
-
-        return $result;
-    }
-
-    /**
-     * Pass the collection to the given callback and then return it
-     * 
-     * @param callable $callback
-     * @return LazyCollection
-     */
-    public function tap(callable $callback)
-    {
-        $callback($this);
-        return $this;
-    }
-
-    /**
-     * Skip the given number of items
-     * 
-     * @param int $count
-     * @return LazyCollection
-     */
-    public function skip($count)
-    {
-        return new LazyCollection(function ($size, $offset) use ($count) {
-            $source = $this->source;
-            return $source($size, $offset + $count);
-        });
-    }
-
-    /**
-     * Set the chunk size for internal data loading
-     *
-     * @param int $size
-     * @return LazyCollection
-     */
-    public function setChunkSize($size)
-    {
-        $this->chunkSize = max(1, (int)$size);
-        return $this;
     }
 }

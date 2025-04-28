@@ -1,6 +1,6 @@
 <?php
 
-namespace App\core\Traits;
+namespace OnlyPHP\Codeigniter3Model\Traits;
 
 trait PaginateQuery
 {
