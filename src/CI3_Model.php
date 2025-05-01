@@ -609,36 +609,40 @@ class CI3_Model extends \CI_Model
                 throw new \Exception('The key or callback is required.');
             }
 
-            $results = $this->get();
+            if ($this->doesntExist()) {
+                return [];
+            }
+
+            $results = [];
+            $sortValues = [];
+
+            foreach ($this->lazy() as $index => $item) {
+                // Store result
+                $results[$index] = $item;
+
+                // Determine sort key
+                $value = is_callable($key)
+                    ? call_user_func($key, $item)
+                    : $this->_getValueUsingDotNotation($item, $key);
+
+                // Normalize nulls for sorting
+                if ($value === null) {
+                    $value = ($direction === SORT_ASC) ? PHP_INT_MIN : PHP_INT_MAX;
+                }
+
+                $sortValues[$index] = $value;
+            }
 
             if (empty($results)) {
-                return $results;
+                return [];
             }
 
-            // Extract sort values
-            $sortValues = [];
-            foreach ($results as $index => $item) {
-                // Handle callback function
-                if (is_callable($key)) {
-                    $sortValues[$index] = call_user_func($key, $item);
-                } else {
-                    $sortValues[$index] = $this->_getValueUsingDotNotation($item, $key);
-                }
+            // Sort based on extracted values
+            ($direction === SORT_ASC)
+                ? asort($sortValues, $sortFlags)
+                : arsort($sortValues, $sortFlags);
 
-                // Handle null values (place them at the beginning for asc, end for desc)
-                if ($sortValues[$index] === null) {
-                    $sortValues[$index] = ($direction === SORT_ASC) ? PHP_INT_MIN : PHP_INT_MAX;
-                }
-            }
-
-            // Sort the array
-            if ($direction === SORT_ASC) {
-                asort($sortValues, $sortFlags);
-            } else {
-                arsort($sortValues, $sortFlags);
-            }
-
-            // Reorder the results based on the sorted keys
+            // Reorder the results
             $sortedResults = [];
             foreach (array_keys($sortValues) as $index) {
                 $sortedResults[] = $results[$index];
@@ -647,7 +651,7 @@ class CI3_Model extends \CI_Model
             return $sortedResults;
         } catch (\Exception $e) {
             if ($this->debug) log_message('error', 'sortBy error: ' . $e->getMessage());
-            throw $e; // Re-throw the exception after cleanup
+            throw $e;
         }
     }
 
@@ -668,12 +672,11 @@ class CI3_Model extends \CI_Model
                 throw new \Exception('Sorting criteria are required as array.');
             }
 
-            $results = $this->get();
-
-            if (empty($results)) {
-                return $results;
+            if ($this->doesntExist()) {
+                return [];
             }
 
+            $results = $this->get();
             return $this->_multiSort($results, $criteria);
         } catch (\Exception $e) {
             if ($this->debug) log_message('error', 'sortByMultiple error: ' . $e->getMessage());
@@ -683,8 +686,14 @@ class CI3_Model extends \CI_Model
 
     public function exists()
     {
-        $count = $this->count();
-        return $count > 0;
+        $db = clone $this->_database;
+        $this->resetQueryBuilderState($db, ['qb_select', 'qb_limit', 'qb_orderby']);
+        $result = $db->select('1')->limit(1)->get($this->getTableWithIndex());
+
+        if ($this->debug) log_message('debug', 'Exists Query: ' . $db->last_query());
+
+        unset($db);
+        return $result !== false && $result->num_rows() > 0;
     }
 
     public function doesntExist()
@@ -697,20 +706,83 @@ class CI3_Model extends \CI_Model
      * Similar to Laravel's filter() method
      * 
      * @param callable $callback The callback to filter results
+     * @param int $chunkSize Optional. The number of records to load in each database query. Default: 500
      * @return array Filtered results
      */
-    public function filter(callable $callback)
+    public function filter(callable $callback, $chunkSize = 500)
     {
-        $results = $this->get();
-        $filtered = [];
-
-        foreach ($results as $key => $value) {
-            if (call_user_func($callback, $value, $key)) {
-                $filtered[$key] = $value;
-            }
+        if (!is_callable($callback)) {
+            throw new \InvalidArgumentException('The provided filter callback must be callable.');
         }
+    
+        if ($this->doesntExist()) {
+            return [];
+        }
+    
+        $filtered = [];
+    
+        $this->chunk($chunkSize, function ($results) use (&$filtered, $callback) {
+            foreach ($results as $key => $value) {
+                if ($callback($value, $key)) {
+                    $filtered[] = $value;
+                }
+            }
+            return true;
+        });
+    
+        return $filtered;
+    }
+    
 
-        return array_values($filtered);
+    /**
+     * Get an array of a single column's values from the results
+     * Similar to Laravel's pluck() method
+     * Supports dot notation for accessing relationship values
+     * 
+     * @param string $column The column to retrieve values from (supports dot notation)
+     * @param string|null $key Optional key column to use as array keys (supports dot notation)
+     * @return array An array of values or key-value pairs
+     */
+    public function pluck($column, $key = null)
+    {
+        try {
+            if (empty($column)) {
+                throw new \Exception('The column key is required.');
+            }
+
+            $values = [];
+
+            if($this->doesntExist()) {
+                return $values;
+            } 
+
+            $this->chunk(500, function($results) use (&$values, $column, $key) {
+                foreach ($results as $result) {
+                    // Get column value, supporting dot notation for relations
+                    $columnValue = $this->_getValueUsingDotNotation($result, $column);
+
+                    if ($key !== null) {
+                        // Get key value, supporting dot notation for relations
+                        $keyValue = $this->_getValueUsingDotNotation($result, $key);
+
+                        if ($keyValue !== null) {
+                            $values[$keyValue] = $columnValue;
+                        } else {
+                            $values[] = $columnValue;
+                        }
+                    } else {
+                        $values[] = $columnValue;
+                    }
+                }
+                
+                return true; 
+            });
+
+            return $values;
+        } catch (\Exception $e) {
+            if ($this->debug) log_message('error', 'Pluck error: ' . $e->getMessage());
+            throw $e; // Re-throw the exception after cleanup
+        }
     }
 
     /**
@@ -725,10 +797,17 @@ class CI3_Model extends \CI_Model
     {
         // Clone the original database state
         $originalState = $this->_cloneDatabaseSettings();
-        $this->_database = clone $originalState['db'];
 
-        // Check if primary key is indexed
-        $isIndexed = $this->isColumnIndexed($originalState['primaryKey'], $originalState['table']);
+        $checkSelect = $this->getQueryBuilderState($this->_database, ['qb_select']);
+
+        $isIndexed = false;
+        if (
+            isset($checkSelect['qb_select'])
+            && !empty($checkSelect['qb_select'])
+            && (in_array($this->primaryKey, $checkSelect['qb_select']) || in_array($this->table . '.' . $this->primaryKey, $checkSelect['qb_select']))
+        ) {
+            $isIndexed = $this->isColumnIndexed($this->primaryKey, $this->table);
+        }
 
         if ($this->debug) {
             log_message('debug', "Cursor using " . ($isIndexed ? "SEEK-based ✅" : "OFFSET-based ❌") . " pagination.");
@@ -833,8 +912,16 @@ class CI3_Model extends \CI_Model
         try {
             $model = $this;
 
-            // Check if primary key is indexed
-            $isIndexed = $this->isColumnIndexed($this->primaryKey, $this->table);
+            $checkSelect = $this->getQueryBuilderState($this->_database, ['qb_select']);
+
+            $isIndexed = false;
+            if (
+                isset($checkSelect['qb_select'])
+                && !empty($checkSelect['qb_select'])
+                && (in_array($this->primaryKey, $checkSelect['qb_select']) || in_array($this->table . '.' . $this->primaryKey, $checkSelect['qb_select']))
+            ) {
+                $isIndexed = $this->isColumnIndexed($this->primaryKey, $this->table);
+            }
 
             if ($this->debug) {
                 log_message('debug', "Lazy Collection using " . ($isIndexed ? "SEEK-based ✅" : "OFFSET-based ❌") . " pagination.");
@@ -902,8 +989,16 @@ class CI3_Model extends \CI_Model
         $offset = 0;
         $lastId = 0;
 
-        // Check if primary key is indexed
-        $isIndexed = $this->isColumnIndexed($originalState['primaryKey'], $originalState['table']);
+        $checkSelect = $this->getQueryBuilderState($originalState['db'], ['qb_select']);
+
+        $isIndexed = false;
+        if (
+            isset($checkSelect['qb_select'])
+            && !empty($checkSelect['qb_select'])
+            && (in_array($originalState['primaryKey'], $checkSelect['qb_select']) || in_array($originalState['table'] . '.' . $originalState['primaryKey'], $checkSelect['qb_select']))
+        ) {
+            $isIndexed = $this->isColumnIndexed($originalState['primaryKey'], $originalState['table']);
+        }
 
         if ($this->debug) {
             log_message('debug', "Chunk using " . ($isIndexed ? "SEEK-based ✅" : "OFFSET-based ❌") . " pagination.");
@@ -978,129 +1073,6 @@ class CI3_Model extends \CI_Model
         $query = $this->_database->count_all_results($this->getTableWithIndex());
         $this->resetQuery();
         return $query;
-    }
-
-    public function toSql()
-    {
-        $this->_withTrashQueryFilter();
-        $this->_applyAggregates();
-
-        $query = $this->_database->get_compiled_select($this->getTableWithIndex());
-        $this->resetQuery();
-        return $query;
-    }
-
-    public function toSqlPatch($data = null, $id = [])
-    {
-        if (!empty($data)) {
-
-            $data = $this->filterData($data);
-
-            if ($this->timestamps) {
-                $this->_set_timezone();
-                $data[$this->updated_at] = date($this->timestamps_format);
-            }
-
-            $this->_database->set($data);
-        }
-
-        if ($id !== null) {
-            $this->_database->where($this->primaryKey, $id);
-        }
-
-        $query = $this->_database->get_compiled_update($this->table, false);
-        $this->resetQuery();
-        return $query;
-    }
-
-    public function toSqlCreate($data = [])
-    {
-        if (!empty($data)) {
-
-            $data = $this->filterData($data);
-
-            if ($this->timestamps) {
-                $this->_set_timezone();
-                $data[$this->created_at] = date($this->timestamps_format);
-            }
-
-            $this->_database->set($data);
-        }
-
-        $query = $this->_database->get_compiled_insert($this->table, false);
-        $this->resetQuery();
-        return $query;
-    }
-
-    public function toSqlDestroy($id = null)
-    {
-        if ($this->softDelete) {
-            $this->_set_timezone();
-            $data[$this->deleted_at] = date($this->timestamps_format);
-            $this->_database->set($data);
-            if ($id !== null) {
-                $this->_database->where($this->primaryKey, $id);
-            }
-
-            $query = $this->_database->get_compiled_update($this->table, false);
-        } else {
-            if ($id !== null) {
-                $this->_database->where($this->primaryKey, $id);
-            }
-
-            $query = $this->_database->get_compiled_delete($this->table, false);
-        }
-
-        $this->resetQuery();
-        return $query;
-    }
-
-    /**
-     * Get an array of a single column's values from the results
-     * Similar to Laravel's pluck() method
-     * Supports dot notation for accessing relationship values
-     * 
-     * @param string $column The column to retrieve values from (supports dot notation)
-     * @param string|null $key Optional key column to use as array keys (supports dot notation)
-     * @return array An array of values or key-value pairs
-     */
-    public function pluck($column, $key = null)
-    {
-        try {
-            if (empty($column)) {
-                throw new \Exception('The column key is required.');
-            }
-
-            $results = $this->get();
-            $values = [];
-
-            if (empty($results)) {
-                return $values;
-            }
-
-            foreach ($results as $result) {
-                // Get column value, supporting dot notation for relations
-                $columnValue = $this->_getValueUsingDotNotation($result, $column);
-
-                if ($key !== null) {
-                    // Get key value, supporting dot notation for relations
-                    $keyValue = $this->_getValueUsingDotNotation($result, $key);
-
-                    if ($keyValue !== null) {
-                        $values[$keyValue] = $columnValue;
-                    } else {
-                        $values[] = $columnValue;
-                    }
-                } else {
-                    $values[] = $columnValue;
-                }
-            }
-
-            return $values;
-        } catch (\Exception $e) {
-            if ($this->debug) log_message('error', 'Pluck error: ' . $e->getMessage());
-            throw $e; // Re-throw the exception after cleanup
-        }
     }
 
     /**
@@ -1199,6 +1171,81 @@ class CI3_Model extends \CI_Model
             if ($this->debug) log_message('error', 'contains error: ' . $e->getMessage());
             throw $e; // Re-throw the exception after cleanup
         }
+    }
+
+    public function toSql()
+    {
+        $this->_withTrashQueryFilter();
+        $this->_applyAggregates();
+
+        $query = $this->_database->get_compiled_select($this->getTableWithIndex());
+        $this->resetQuery();
+        return $query;
+    }
+
+    public function toSqlPatch($data = null, $id = [])
+    {
+        if (!empty($data)) {
+
+            $data = $this->filterData($data);
+
+            if ($this->timestamps) {
+                $this->_set_timezone();
+                $data[$this->updated_at] = date($this->timestamps_format);
+            }
+
+            $this->_database->set($data);
+        }
+
+        if ($id !== null) {
+            $this->_database->where($this->primaryKey, $id);
+        }
+
+        $query = $this->_database->get_compiled_update($this->table, false);
+        $this->resetQuery();
+        return $query;
+    }
+
+    public function toSqlCreate($data = [])
+    {
+        if (!empty($data)) {
+
+            $data = $this->filterData($data);
+
+            if ($this->timestamps) {
+                $this->_set_timezone();
+                $data[$this->created_at] = date($this->timestamps_format);
+            }
+
+            $this->_database->set($data);
+        }
+
+        $query = $this->_database->get_compiled_insert($this->table, false);
+        $this->resetQuery();
+        return $query;
+    }
+
+    public function toSqlDestroy($id = null)
+    {
+        if ($this->softDelete) {
+            $this->_set_timezone();
+            $data[$this->deleted_at] = date($this->timestamps_format);
+            $this->_database->set($data);
+            if ($id !== null) {
+                $this->_database->where($this->primaryKey, $id);
+            }
+
+            $query = $this->_database->get_compiled_update($this->table, false);
+        } else {
+            if ($id !== null) {
+                $this->_database->where($this->primaryKey, $id);
+            }
+
+            $query = $this->_database->get_compiled_delete($this->table, false);
+        }
+
+        $this->resetQuery();
+        return $query;
     }
 
     /**
@@ -2545,6 +2592,73 @@ class CI3_Model extends \CI_Model
         return $current;
     }
 
+    /**
+     * Resets internal query builder state for a CodeIgniter 3 database instance.
+     *
+     * @param object $db         The DB instance (CI_DB_*_driver or subclass).
+     * @param array  $properties Properties to reset (default: core QB properties).
+     * @return void
+     */
+    protected function resetQueryBuilderState(&$db, $properties = [])
+    {
+        $defaultProperties = [
+            'qb_select', 'qb_from', 'qb_join', 'qb_where', 'qb_orderby',
+            'qb_groupby', 'qb_having', 'qb_limit', 'qb_offset'
+        ];
+
+        $properties = empty($properties) ? $defaultProperties : $properties;
+        $reflectedProps = [];
+
+        $class = get_class($db);
+        while ($class) {
+            $reflection = new \ReflectionClass($class);
+            foreach ($properties as $prop) {
+                if (!isset($reflectedProps[$prop]) && $reflection->hasProperty($prop)) {
+                    $property = $reflection->getProperty($prop);
+                    $property->setAccessible(true);
+                    $reflectedProps[$prop] = $property;
+                }
+            }
+            $class = get_parent_class($class);
+        }
+
+        foreach ($reflectedProps as $prop => $property) {
+            $resetValue = in_array($prop, ['qb_limit', 'qb_offset']) ? false : [];
+            $property->setValue($db, $resetValue);
+        }
+    }
+
+    protected function getQueryBuilderState($db, $properties = [])
+    {
+        $defaultProperties = [
+            'qb_select', 'qb_from', 'qb_join', 'qb_where', 'qb_orderby',
+            'qb_groupby', 'qb_having', 'qb_limit', 'qb_offset'
+        ];
+
+        $properties = empty($properties) ? $defaultProperties : $properties;
+        $reflectedProps = [];
+        $results = [];
+
+        $class = get_class($db);
+        while ($class) {
+            $reflection = new \ReflectionClass($class);
+            foreach ($properties as $prop) {
+                if (!isset($reflectedProps[$prop]) && $reflection->hasProperty($prop)) {
+                    $property = $reflection->getProperty($prop);
+                    $property->setAccessible(true);
+                    $reflectedProps[$prop] = $property;
+                }
+            }
+            $class = get_parent_class($class);
+        }
+
+        foreach ($reflectedProps as $prop => $property) {
+            $results[$prop] = $property->getValue($db);
+        }
+
+        return $results;
+    }
+
     # FORMAT RESPONSE HELPER
 
     public function toArray()
@@ -2821,13 +2935,12 @@ class CI3_Model extends \CI_Model
     private function isColumnIndexed($columnName, $tableName)
     {
         $query = $this->_database->query(
-            "
-            SELECT COUNT(1) as indexed 
-            FROM INFORMATION_SCHEMA.STATISTICS 
-            WHERE TABLE_SCHEMA = DATABASE() 
-            AND TABLE_NAME = ? 
-            AND INDEX_NAME != 'PRIMARY' 
-            AND COLUMN_NAME = ?",
+            "SELECT COUNT(1) as indexed 
+                FROM INFORMATION_SCHEMA.STATISTICS 
+                WHERE TABLE_SCHEMA = DATABASE() 
+                AND TABLE_NAME = ? 
+                AND INDEX_NAME != 'PRIMARY' 
+                AND COLUMN_NAME = ?",
             [$tableName, $columnName]
         );
 
