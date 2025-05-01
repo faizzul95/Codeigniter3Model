@@ -526,25 +526,25 @@ class CI3_Model extends \CI_Model
 
     public function rightJoin($table, $condition)
     {
-        $this->_database->join($table, $condition, 'right');
+        $this->join($table, $condition, 'right');
         return $this;
     }
 
     public function leftJoin($table, $condition)
     {
-        $this->_database->join($table, $condition, 'left');
+        $this->join($table, $condition, 'left');
         return $this;
     }
 
     public function innerJoin($table, $condition)
     {
-        $this->_database->join($table, $condition, 'inner');
+        $this->join($table, $condition, 'inner');
         return $this;
     }
 
     public function outerJoin($table, $condition)
     {
-        $this->_database->join($table, $condition, 'outer');
+        $this->join($table, $condition, 'outer');
         return $this;
     }
 
@@ -687,6 +687,7 @@ class CI3_Model extends \CI_Model
     public function exists()
     {
         $db = clone $this->_database;
+        $db->_withTrashQueryFilter();
         $this->resetQueryBuilderState($db, ['qb_select', 'qb_limit', 'qb_orderby']);
         $result = $db->select('1')->limit(1)->get($this->getTableWithIndex());
 
@@ -2914,12 +2915,12 @@ class CI3_Model extends \CI_Model
 
             // Logging
             if (!empty($fullScans)) {
-                log_message('warning', "FULL TABLE SCAN:\n" . json_encode($fullScans, JSON_PRETTY_PRINT));
-                log_message('warning', "Query:\n" . $query);
+                log_message('debug', "FULL TABLE SCAN:\n" . json_encode($fullScans, JSON_PRETTY_PRINT));
+                log_message('debug', "Query:\n" . $query);
             }
 
             if (!empty($inefficientIndexes)) {
-                log_message('warning', "INEFFICIENT INDEX USAGE:\n" . json_encode($inefficientIndexes, JSON_PRETTY_PRINT));
+                log_message('debug', "INEFFICIENT INDEX USAGE:\n" . json_encode($inefficientIndexes, JSON_PRETTY_PRINT));
             }
 
             if (!empty($indexSuggestions)) {
