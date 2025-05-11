@@ -686,12 +686,12 @@ class CI3_Model extends \CI_Model
 
     public function exists()
     {
-        $db = clone $this->_database;
+        $db = clone $this;
+        $this->resetQueryBuilderState($db->_database, ['qb_select', 'qb_limit', 'qb_orderby']);
         $db->_withTrashQueryFilter();
-        $this->resetQueryBuilderState($db, ['qb_select', 'qb_limit', 'qb_orderby']);
-        $result = $db->select('1')->limit(1)->get($this->getTableWithIndex());
+        $result = $db->_database->select('1')->limit(1)->get($this->getTableWithIndex());
 
-        if ($this->debug) log_message('debug', 'Exists Query: ' . $db->last_query());
+        if ($this->debug) log_message('debug', 'Exists Query: ' . $db->_database->last_query());
 
         unset($db);
         return $result !== false && $result->num_rows() > 0;
@@ -1501,9 +1501,9 @@ class CI3_Model extends \CI_Model
             $data = array_merge($conditions, $values);
 
             // Check if a record exists with the given attributes
-            $existingRecord = get_instance()->db->select($this->primaryKey)->from($this->getTableWithIndex())->where($conditions)->limit(1)->get()->row_array();
+            $existingRecord = get_instance()->db->select(1, FALSE)->from($this->getTableWithIndex())->where($conditions)->limit(1)->get();
 
-            if (!empty($existingRecord)) {
+            if ($existingRecord !== false && $existingRecord->num_rows() > 0) {
                 // If record exists, update it
                 return $this->patch($data, $existingRecord[$this->primaryKey]);
             }
@@ -1721,21 +1721,54 @@ class CI3_Model extends \CI_Model
     public function patchAll($data)
     {
         try {
-            $dataQuery = $this->get();
-
-            if (!$dataQuery) {
+            if ($this->doesntExist()) {
                 throw new \Exception('No record found');
             }
 
-            $updateData = [];
-            foreach ($dataQuery as $dq) {
-                $data[$this->primaryKey] = $dq[$this->primaryKey];
-                $updateData[] = $data;
+            $primaryKey = $this->primaryKey;
+            $listIdsSuccess = [];
+            $listIdsFailed = [];
+
+            $this->chunk(1000, function ($results) use (&$listIdsSuccess, &$listIdsFailed, $data, $primaryKey) {
+
+                $updateData = [];
+                foreach ($results as $record) {
+                    $patchedData = $data;
+                    $patchedData[$primaryKey] = $record[$primaryKey];
+                    $updateData[] = $patchedData;
+                }
+
+                $result = $this->batchPatch($updateData, $primaryKey);
+
+                if ($result['code'] === 200) {
+                    $listIdsSuccess = array_merge($listIdsSuccess, $result['id']);
+                } else {
+                    $failedIds = array_column($updateData, $primaryKey);
+                    $listIdsFailed = array_merge($listIdsFailed, $failedIds);
+                }                
+
+                return true;
+            });
+
+            $totalSuccess = count($listIdsSuccess);
+
+            return [
+                'code' => $totalSuccess > 0 ? 200 : 422,
+                'id' => $totalSuccess > 0 ? $listIdsSuccess : null,
+                'data' => [
+                    'successful_ids' => $listIdsSuccess,
+                    'failed_ids' => $listIdsFailed,
+                    'success_count' => count($listIdsSuccess),
+                    'fail_count' => count($listIdsFailed)
+                ],
+                'message' => $totalSuccess > 0 ? 'Updated successfully' : 'No records updated',
+                'action' => 'update'
+            ];
+        } catch (\Exception $e) {
+            if ($this->debug) {
+                log_message('error', "Update error for patchAll: " . $e->getMessage());
             }
 
-            return $this->batchPatch($updateData, $this->primaryKey);
-        } catch (\Exception $e) {
-            if ($this->debug) log_message('error', "Update error for patchAll: "  . $e->getMessage());
             return [
                 'code' => 422,
                 'error' => $e->getMessage(),
