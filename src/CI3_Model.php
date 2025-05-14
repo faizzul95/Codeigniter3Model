@@ -1500,12 +1500,22 @@ class CI3_Model extends \CI_Model
             // Merge $attributes and $values
             $data = array_merge($conditions, $values);
 
-            // Check if a record exists with the given attributes
-            $existingRecord = get_instance()->db->select(1, FALSE)->from($this->getTableWithIndex())->where($conditions)->limit(1)->get();
+            $id = isset($data[$this->primaryKey]) && !empty($data[$this->primaryKey]) ? $data[$this->primaryKey] : null;
+           
+            // If id is not provided, check if the record exists
+            if (empty($id)) {
+                if (isset($conditions[$this->primaryKey])) unset($conditions[$this->primaryKey]);
 
-            if ($existingRecord !== false && $existingRecord->num_rows() > 0) {
+                $existingRecord = $this->select($this->primaryKey)->where($conditions)->first();
+
+                if (!empty($existingRecord)) {
+                    $id = $existingRecord[$this->primaryKey] ?? null;
+                }
+            }
+
+            if (!empty($id)) {
                 // If record exists, update it
-                return $this->patch($data, $existingRecord[$this->primaryKey]);
+                return $this->patch($data, $id);
             }
 
             // If record doesn't exist, create it
