@@ -1505,11 +1505,26 @@ class CI3_Model extends \CI_Model
             // If id is not provided, check if the record exists
             if (empty($id)) {
                 if (isset($conditions[$this->primaryKey])) unset($conditions[$this->primaryKey]);
-
-                $existingRecord = $this->select($this->primaryKey)->where($conditions)->first();
-
-                if (!empty($existingRecord)) {
-                    $id = $existingRecord[$this->primaryKey] ?? null;
+                
+                // Check if there are any conditions to process
+                if (!empty($conditions)) {
+                    // Start a query builder
+                    $query = $this->select($this->primaryKey);
+                    
+                    // Apply conditions based on their values
+                    foreach ($conditions as $key => $value) {
+                        if ($value === null || $value === '') {
+                            $query->whereNull($key);
+                        } else {
+                            $query->where($key, $value);
+                        }
+                    }
+                    
+                    $existingRecord = $query->first();
+                    
+                    if (!empty($existingRecord)) {
+                        $id = $existingRecord[$this->primaryKey] ?? null;
+                    }
                 }
             }
 
