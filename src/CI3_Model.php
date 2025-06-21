@@ -335,7 +335,9 @@ class CI3_Model extends \CI_Model
             $operator = '=';
         }
 
-        $this->applyCondition('where', "TIME($column)", $value, $operator);
+        [$processedColumn, $alias] = $this->processColumnWithAlias($column);
+
+        $this->applyCondition('where', "TIME({$processedColumn})", $value, $operator);
         return $this;
     }
 
@@ -346,7 +348,9 @@ class CI3_Model extends \CI_Model
             $operator = '=';
         }
 
-        $this->applyCondition('or_where', "TIME($column)", $value, $operator);
+        [$processedColumn, $alias] = $this->processColumnWithAlias($column);
+
+        $this->applyCondition('or_where', "TIME({$processedColumn})", $value, $operator);
         return $this;
     }
 
@@ -357,7 +361,9 @@ class CI3_Model extends \CI_Model
             $operator = '=';
         }
 
-        $this->applyCondition('where', "DATE($column)", $value, $operator);
+        [$processedColumn, $alias] = $this->processColumnWithAlias($column);
+
+        $this->applyCondition('where', "DATE({$processedColumn})", $value, $operator);
         return $this;
     }
 
@@ -368,7 +374,9 @@ class CI3_Model extends \CI_Model
             $operator = '=';
         }
 
-        $this->applyCondition('or_where', "DATE($column)", $value, $operator);
+        [$processedColumn, $alias] = $this->processColumnWithAlias($column);
+
+        $this->applyCondition('or_where', "DATE({$processedColumn})", $value, $operator);
         return $this;
     }
 
@@ -380,7 +388,9 @@ class CI3_Model extends \CI_Model
         }
 
         $this->validateDayMonth($value);
-        $this->applyCondition('where', "DAY($column)", $value, $operator);
+        [$processedColumn, $alias] = $this->processColumnWithAlias($column);
+
+        $this->applyCondition('where', "DAY({$processedColumn})", $value, $operator);
         return $this;
     }
 
@@ -392,7 +402,9 @@ class CI3_Model extends \CI_Model
         }
 
         $this->validateDayMonth($value);
-        $this->applyCondition('or_where', "DAY($column)", $value, $operator);
+        [$processedColumn, $alias] = $this->processColumnWithAlias($column);
+
+        $this->applyCondition('or_where', "DAY({$processedColumn})", $value, $operator);
         return $this;
     }
 
@@ -404,7 +416,9 @@ class CI3_Model extends \CI_Model
         }
 
         $this->validateYear($value);
-        $this->applyCondition('where', "YEAR($column)", $value, $operator);
+        [$processedColumn, $alias] = $this->processColumnWithAlias($column);
+
+        $this->applyCondition('where', "YEAR({$processedColumn})", $value, $operator);
         return $this;
     }
 
@@ -416,7 +430,9 @@ class CI3_Model extends \CI_Model
         }
 
         $this->validateYear($value);
-        $this->applyCondition('or_where', "YEAR($column)", $value, $operator);
+        [$processedColumn, $alias] = $this->processColumnWithAlias($column);
+
+        $this->applyCondition('or_where', "YEAR({$processedColumn})", $value, $operator);
         return $this;
     }
 
@@ -428,7 +444,9 @@ class CI3_Model extends \CI_Model
         }
 
         $this->validateDayMonth($value, true);
-        $this->applyCondition('where', "MONTH($column)", $value, $operator);
+        [$processedColumn, $alias] = $this->processColumnWithAlias($column);
+
+        $this->applyCondition('where', "MONTH({$processedColumn})", $value, $operator);
         return $this;
     }
 
@@ -440,7 +458,9 @@ class CI3_Model extends \CI_Model
         }
 
         $this->validateDayMonth($value, true);
-        $this->applyCondition('or_where', "MONTH($column)", $value, $operator);
+        [$processedColumn, $alias] = $this->processColumnWithAlias($column);
+
+        $this->applyCondition('or_where', "MONTH({$processedColumn})", $value, $operator);
         return $this;
     }
 
@@ -715,13 +735,13 @@ class CI3_Model extends \CI_Model
         if (!is_callable($callback)) {
             throw new \InvalidArgumentException('The provided filter callback must be callable.');
         }
-    
+
         if ($this->doesntExist()) {
             return [];
         }
-    
+
         $filtered = [];
-    
+
         $this->chunk($chunkSize, function ($results) use (&$filtered, $callback) {
             foreach ($results as $key => $value) {
                 if ($callback($value, $key)) {
@@ -730,10 +750,10 @@ class CI3_Model extends \CI_Model
             }
             return true;
         });
-    
+
         return $filtered;
     }
-    
+
 
     /**
      * Get an array of a single column's values from the results
@@ -753,11 +773,11 @@ class CI3_Model extends \CI_Model
 
             $values = [];
 
-            if($this->doesntExist()) {
+            if ($this->doesntExist()) {
                 return $values;
-            } 
+            }
 
-            $this->chunk(500, function($results) use (&$values, $column, $key) {
+            $this->chunk(500, function ($results) use (&$values, $column, $key) {
                 foreach ($results as $result) {
                     // Get column value, supporting dot notation for relations
                     $columnValue = $this->_getValueUsingDotNotation($result, $column);
@@ -775,8 +795,8 @@ class CI3_Model extends \CI_Model
                         $values[] = $columnValue;
                     }
                 }
-                
-                return true; 
+
+                return true;
             });
 
             return $values;
@@ -1501,16 +1521,16 @@ class CI3_Model extends \CI_Model
             $data = array_merge($conditions, $values);
 
             $id = isset($data[$this->primaryKey]) && !empty($data[$this->primaryKey]) ? $data[$this->primaryKey] : null;
-           
+
             // If id is not provided, check if the record exists
             if (empty($id)) {
                 if (isset($conditions[$this->primaryKey])) unset($conditions[$this->primaryKey]);
-                
+
                 // Check if there are any conditions to process
                 if (!empty($conditions)) {
                     // Start a query builder
                     $query = $this->select($this->primaryKey);
-                    
+
                     // Apply conditions based on their values
                     foreach ($conditions as $key => $value) {
                         if ($value === null || $value === '') {
@@ -1519,9 +1539,9 @@ class CI3_Model extends \CI_Model
                             $query->where($key, $value);
                         }
                     }
-                    
+
                     $existingRecord = $query->first();
-                    
+
                     if (!empty($existingRecord)) {
                         $id = $existingRecord[$this->primaryKey] ?? null;
                     }
@@ -1770,7 +1790,7 @@ class CI3_Model extends \CI_Model
                 } else {
                     $failedIds = array_column($updateData, $primaryKey);
                     $listIdsFailed = array_merge($listIdsFailed, $failedIds);
-                }                
+                }
 
                 return true;
             });
@@ -2402,6 +2422,34 @@ class CI3_Model extends \CI_Model
             'index' => $this->_indexString ?? null,
             'indexType' => $this->_indexType ?? 'USE INDEX'
         ];
+    }
+
+    /**
+     * Process column name to handle table prefix and alias
+     * @param string $column Column name (may include alias)
+     * @return array [processed_column, alias]
+     */
+    private function processColumnWithAlias($column)
+    {
+        $alias = null;
+        $processedColumn = $column;
+
+        // Check if column has alias (contains ' as ' or ' AS ')
+        if (preg_match('/^(.+?)\s+as\s+(.+)$/i', trim($column), $matches)) {
+            $processedColumn = trim($matches[1]);
+            $alias = trim($matches[2]);
+        }
+
+        // Check if column already has dot (table.column format)
+        if (strpos($processedColumn, '.') === false) {
+            $processedColumn = "`{$this->table}`.`{$processedColumn}`";
+        } else {
+            // Already has table prefix, just add backticks if needed
+            $parts = explode('.', $processedColumn);
+            $processedColumn = "`{$parts[0]}`.`{$parts[1]}`";
+        }
+
+        return [$processedColumn, $alias];
     }
 
     private function searchRelatedKeys($data, $keyToSearch)

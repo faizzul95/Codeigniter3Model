@@ -466,8 +466,7 @@ trait EagerQuery
         $existsQuery = null;
 
         // Reset and initialize the database query
-        $this->_database->reset_query();
-        $subquery = $this->_database;
+        $subquery = clone $this->_database;
 
         $totalNested = count($parts) - 1;
         $totalNestedProcess = 0;
@@ -564,6 +563,8 @@ trait EagerQuery
                 $this->_database->or_where("{$existsType} ({$existsQuery})");
             }
         }
+
+        unset($subquery, $existsQuery, $currentModel, $relationMainTable, $lastRelationModel);
     }
 
     private function _applySingleRelation($relation, \Closure $callback = null, $boolean = 'AND', $existsType = 'EXISTS')
@@ -587,8 +588,7 @@ trait EagerQuery
             $relationTable = $relationModel->table;
 
             // Build the subquery
-            $this->_database->reset_query();
-            $subquery = $this->_database;
+            $subquery = clone $this->_database;
 
             if ($callback) {
                 $callback($relationModel);
@@ -626,6 +626,8 @@ trait EagerQuery
             } else {
                 $this->_database->or_where("{$existsType} ({$existsQuery})");
             }
+
+            unset($subquery, $existsQuery, $relationModel, $relationTable);
         }
     }
 
@@ -770,55 +772,99 @@ trait EagerQuery
         return $this;
     }
 
-    public function withCount($relations, $alias = null)
+    public function withCount($relations, $callback = null)
     {
-        // If relations is a string and we have more arguments
-        if (is_string($relations) && func_num_args() > 1) {
-            $args = func_get_args();
-            // Check if the second argument is a string (alias) or a closure
-            if (is_string($args[1])) {
-                $alias = $args[1];
+        // Handle different parameter combinations
+        if (is_string($relations)) {
+            // Single relation with optional callback
+            if (is_callable($callback)) {
+                return $this->withAggregate([$relations => $callback], 'count', '*');
+            } else {
+                // callback is actually an alias
+                return $this->withAggregate($relations, 'count', '*', $callback);
             }
+        } elseif (is_array($relations)) {
+            // Array of relations, callback parameter is ignored for arrays
+            return $this->withAggregate($relations, 'count', '*');
         }
 
-        return $this->withAggregate($relations, 'count', '*', $alias);
+        return $this;
     }
 
-    public function withSum($relations, $column, $alias = null)
+    public function withSum($relations, $column, $callback = null)
     {
-        if (is_array($relations) && func_num_args() == 2) {
+        // Handle different parameter combinations
+        if (is_string($relations)) {
+            if (is_callable($callback)) {
+                // withSum('relation', 'column', function($query) { ... })
+                return $this->withAggregate([$relations => $callback], 'sum', $column);
+            } else {
+                // withSum('relation', 'column', 'alias') or withSum('relation', 'column')
+                return $this->withAggregate($relations, 'sum', $column, $callback);
+            }
+        } elseif (is_array($relations)) {
+            // Array format: withSum(['relation' => function($query) { ... }], 'column')
             return $this->withAggregate($relations, 'sum', $column);
         }
 
-        return $this->withAggregate($relations, 'sum', $column, $alias);
+        return $this;
     }
 
-    public function withMin($relations, $column, $alias = null)
+    public function withMin($relations, $column, $callback = null)
     {
-        if (is_array($relations) && func_num_args() == 2) {
+        // Handle different parameter combinations
+        if (is_string($relations)) {
+            if (is_callable($callback)) {
+                // withMin('relation', 'column', function($query) { ... })
+                return $this->withAggregate([$relations => $callback], 'min', $column);
+            } else {
+                // withMin('relation', 'column', 'alias') or withMin('relation', 'column')
+                return $this->withAggregate($relations, 'min', $column, $callback);
+            }
+        } elseif (is_array($relations)) {
+            // Array format: withMin(['relation' => function($query) { ... }], 'column')
             return $this->withAggregate($relations, 'min', $column);
         }
 
-        return $this->withAggregate($relations, 'min', $column, $alias);
+        return $this;
     }
 
-    public function withMax($relations, $column, $alias = null)
+    public function withMax($relations, $column, $callback = null)
     {
-        if (is_array($relations) && func_num_args() == 2) {
+        // Handle different parameter combinations
+        if (is_string($relations)) {
+            if (is_callable($callback)) {
+                // withMax('relation', 'column', function($query) { ... })
+                return $this->withAggregate([$relations => $callback], 'max', $column);
+            } else {
+                // withMax('relation', 'column', 'alias') or withMax('relation', 'column')
+                return $this->withAggregate($relations, 'max', $column, $callback);
+            }
+        } elseif (is_array($relations)) {
+            // Array format: withMax(['relation' => function($query) { ... }], 'column')
             return $this->withAggregate($relations, 'max', $column);
         }
 
-        return $this->withAggregate($relations, 'max', $column, $alias);
+        return $this;
     }
 
-    public function withAvg($relations, $column, $alias = null)
+    public function withAvg($relations, $column, $callback = null)
     {
-        // Handle case where relations is an array of format ['relation as alias' => function]
-        if (is_array($relations) && func_num_args() == 2) {
+        // Handle different parameter combinations
+        if (is_string($relations)) {
+            if (is_callable($callback)) {
+                // withAvg('relation', 'column', function($query) { ... })
+                return $this->withAggregate([$relations => $callback], 'avg', $column);
+            } else {
+                // withAvg('relation', 'column', 'alias') or withAvg('relation', 'column')
+                return $this->withAggregate($relations, 'avg', $column, $callback);
+            }
+        } elseif (is_array($relations)) {
+            // Array format: withAvg(['relation' => function($query) { ... }], 'column')
             return $this->withAggregate($relations, 'avg', $column);
         }
 
-        return $this->withAggregate($relations, 'avg', $column, $alias);
+        return $this;
     }
 
     private function loadRelations($results)
