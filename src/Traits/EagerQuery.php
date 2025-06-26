@@ -761,7 +761,8 @@ trait EagerQuery
                     return !($aggregate['relation'] === $relation &&
                         $aggregate['type'] === $function &&
                         $aggregate['column'] === $column &&
-                        (!isset($aggregate['alias']) || $aggregate['alias'] !== $aliasName));
+                        (!isset($aggregate['alias']) || $aggregate['alias'] === $aliasName)
+                    );
                 }
             );
 
