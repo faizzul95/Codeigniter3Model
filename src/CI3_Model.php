@@ -2,9 +2,11 @@
 
 namespace OnlyPHP\Codeigniter3Model;
 
-use OnlyPHP\Codeigniter3Model\LazyCollection;
-use OnlyPHP\Codeigniter3Model\Traits\EagerQuery;
-use OnlyPHP\Codeigniter3Model\Traits\PaginateQuery;
+use OnlyPHP\Codeigniter3Model\Components\LazyCollection;
+use OnlyPHP\Codeigniter3Model\Components\Traits\EagerQuery;
+use OnlyPHP\Codeigniter3Model\Components\Traits\PaginateQuery;
+
+use OnlyPHP\Codeigniter3Model\Components\JoinBuilder;
 
 /**
  * MY_Model Class
@@ -540,31 +542,74 @@ class CI3_Model extends \CI_Model
 
     public function join($table, $condition, $type = 'inner')
     {
-        $this->_database->join($table, $condition, $type);
+        try {
+            // Validate table name
+            if (empty($table) || !is_string($table)) {
+                throw new \InvalidArgumentException('Table name must be a non-empty string');
+            }
+
+            // Validate join type
+            $validTypes = ['inner', 'left', 'right', 'outer', 'full', 'full outer'];
+            if (!in_array(strtolower($type), $validTypes)) {
+                throw new \InvalidArgumentException("Invalid join type '{$type}'. Valid types: " . implode(', ', $validTypes));
+            }
+
+            // Check if condition is a closure (Laravel-like syntax)
+            if (is_callable($condition)) {
+                // Create a new JoinBuilder instance to handle the closure
+                $joinBuilder = new JoinBuilder($this->_database, $table, $type);
+
+                // Execute the closure with the join builder
+                $condition($joinBuilder);
+
+                // Apply the built join condition
+                $joinBuilder->apply();
+            } elseif (is_string($condition) && !empty($condition)) {
+                // Original string-based join condition
+                $this->_database->join($table, $condition, $type);
+            } else {
+                throw new \InvalidArgumentException('Join condition must be a string or callable function');
+            }
+        } catch (\Exception $e) {
+            log_message('error', 'Join error: ' . $e->getMessage());
+            throw $e;
+        }
+
         return $this;
     }
 
     public function rightJoin($table, $condition)
     {
-        $this->join($table, $condition, 'right');
-        return $this;
+        return $this->join($table, $condition, 'right');
     }
 
     public function leftJoin($table, $condition)
     {
-        $this->join($table, $condition, 'left');
-        return $this;
+        return $this->join($table, $condition, 'left');
     }
 
     public function innerJoin($table, $condition)
     {
-        $this->join($table, $condition, 'inner');
-        return $this;
+        return $this->join($table, $condition, 'inner');
     }
 
     public function outerJoin($table, $condition)
     {
-        $this->join($table, $condition, 'outer');
+        return $this->join($table, $condition, 'outer');
+    }
+
+    public function fullJoin($table, $condition)
+    {
+        return $this->join($table, $condition, 'full');
+    }
+
+    public function crossJoin($table, $condition = null)
+    {
+        if ($condition === null) {
+            $this->_database->join($table, '1=1', 'cross');
+        } else {
+            return $this->join($table, $condition, 'cross');
+        }
         return $this;
     }
 

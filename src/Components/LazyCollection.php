@@ -1,6 +1,6 @@
 <?php
 
-namespace OnlyPHP\Codeigniter3Model;
+namespace OnlyPHP\Codeigniter3Model\Components;
 
 /**
  * LazyCollection class for handling large datasets with minimal memory usage
