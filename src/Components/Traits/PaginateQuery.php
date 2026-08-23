@@ -7,6 +7,12 @@ trait PaginateQuery
     protected $_paginateColumn = [];
     protected $_paginateSearchValue = '';
 
+    /**
+     * @var int Upper bound on rows a single paginated request may ask for.
+     *          Override per model if a screen genuinely needs more.
+     */
+    public $paginateMaxLength = 1000;
+
     # PAGINATION SECTION
 
     public function setPaginateFilterColumn($column = [])
@@ -26,11 +32,18 @@ trait PaginateQuery
      */
     public function paginate($perPage = 10, $page = null, $searchValue = '', $customFilter = null)
     {
-        $page = $page ?: ($this->input->get('page') ? $this->input->get('page') : 1);
+        $page = (int) ($page ?: ($this->input->get('page') ?: 1));
+        $page = $page < 1 ? 1 : $page;
+
+        $perPage = (int) $perPage;
+        if ($perPage < 1 || $perPage > $this->paginateMaxLength) {
+            $perPage = $this->paginateMaxLength;
+        }
+
         $offset = ($page - 1) * $perPage;
 
-        $this->_paginateSearchValue = !empty($searchValue) ? trim($searchValue) : '';
-        $columns = $this->_database->list_fields($this->table);
+        $this->_paginateSearchValue = !empty($searchValue) ? trim((string) $searchValue) : '';
+        $columns = empty($this->_paginateColumn) ? $this->_database->list_fields($this->table) : $this->_paginateColumn;
 
         $this->_withTrashQueryFilter();
         $this->_applyAggregates();
@@ -105,8 +118,24 @@ trait PaginateQuery
 
     public function paginate_ajax($dataPost, $customFilter = null)
     {
-        $this->_paginateSearchValue = !empty($dataPost['search']['value']) ? trim($dataPost['search']['value']) : '';
+        // The request body is client-controlled, so validate and clamp every field
+        // before use - `length` in particular is unbounded on the wire.
+        if (!is_array($dataPost)) {
+            throw new \InvalidArgumentException('paginate_ajax() expects the DataTables request array.');
+        }
+
         $columns = empty($this->_paginateColumn) ? $this->_database->list_fields($this->table) : $this->_paginateColumn;
+
+        $draw = isset($dataPost['draw']) ? (int) $dataPost['draw'] : 0;
+        $start = isset($dataPost['start']) ? max(0, (int) $dataPost['start']) : 0;
+
+        $length = isset($dataPost['length']) ? (int) $dataPost['length'] : $this->paginateMaxLength;
+        // -1 is DataTables' "all". Treat it, 0, and anything oversized as the cap.
+        if ($length < 1 || $length > $this->paginateMaxLength) {
+            $length = $this->paginateMaxLength;
+        }
+
+        $this->_paginateSearchValue = !empty($dataPost['search']['value']) ? trim((string) $dataPost['search']['value']) : '';
 
         $this->_withTrashQueryFilter();
         $this->_applyAggregates();
@@ -125,17 +154,22 @@ trait PaginateQuery
         // Count total rows after filter
         $total = (int) (clone $this->_database)->count_all_results($this->getTableWithIndex());
 
-        // Fetch only the required page of results
-        $this->limit($dataPost['length'])->offset($dataPost['start']);
+        // Order before limiting, and resolve the sort index against the column list
+        // so an out-of-range value cannot reach orderBy().
+        $orderBy = isset($dataPost['order']) && is_array($dataPost['order']) ? $dataPost['order'] : [];
+        if (!empty($orderBy[0]) && isset($orderBy[0]['column'])) {
+            $sortIndex = (int) $orderBy[0]['column'];
 
-        // Apply Order data if exists
-        $orderBy = $dataPost['order'];
-        if (!empty($orderBy)) {
-            $this->orderBy($columns[$orderBy[0]['column']], $orderBy[0]['dir']);
+            if (array_key_exists($sortIndex, $columns)) {
+                $direction = isset($orderBy[0]['dir']) && strtolower((string) $orderBy[0]['dir']) === 'desc' ? 'DESC' : 'ASC';
+                $this->orderBy($columns[$sortIndex], $direction);
+            }
         }
 
+        $this->limit($length)->offset($start);
+
         return [
-            'draw' => $dataPost['draw'],
+            'draw' => $draw,
             'recordsTotal' => $totalRecords,
             'recordsFiltered' => $total,
             'data' => $this->get(),
@@ -144,10 +178,19 @@ trait PaginateQuery
 
     public function paginate_select_input($perPage = 10, $page = null, $searchValue = '', $customFilter = null)
     {
+        // $page defaults to null here, which would make the offset negative.
+        $page = (int) ($page ?: 1);
+        $page = $page < 1 ? 1 : $page;
+
+        $perPage = (int) $perPage;
+        if ($perPage < 1 || $perPage > $this->paginateMaxLength) {
+            $perPage = $this->paginateMaxLength;
+        }
+
         $offset = ($page - 1) * $perPage;
 
-        $this->_paginateSearchValue = !empty($searchValue) ? trim($searchValue) : '';
-        $columns = $this->_database->list_fields($this->table);
+        $this->_paginateSearchValue = !empty($searchValue) ? trim((string) $searchValue) : '';
+        $columns = empty($this->_paginateColumn) ? $this->_database->list_fields($this->table) : $this->_paginateColumn;
 
         $this->_withTrashQueryFilter();
         $this->_applyAggregates();
@@ -189,33 +232,33 @@ trait PaginateQuery
             $matchType = 1; // Default to exact match
         }
 
-        $filterData = array_reduce(array_keys($condition), function ($carry, $key) use ($condition) {
-            if (!empty($condition[$key]) || $condition[$key] == 0) {
-                $carry[$key] = $condition[$key];
+        $filterData = [];
+        foreach ($condition as $column => $value) {
+            if (!empty($value) || $value === 0 || $value === '0') {
+                $filterData[$column] = $value;
             }
-            return $carry;
-        }, []);
-
-        if (!empty($filterData)) {
-            $this->_database->group_start();
-
-            foreach ($condition as $column => $value) {
-                if (!empty($value) || $value == 0) {
-                    switch ($matchType) {
-                        case 2:
-                            $this->_database->like($column, $value, 'after'); // `column` LIKE 'value%' ESCAPE '!'
-                            break;
-                        case 3:
-                            $this->_database->like($column, $value); // `column` LIKE '%value%' ESCAPE '!'
-                            break;
-                        default:
-                            $this->_database->where($column, $value);
-                    }
-                }
-            }
-
-            $this->_database->group_end();
         }
+
+        if (empty($filterData)) {
+            return;
+        }
+
+        $this->_database->group_start();
+
+        foreach ($filterData as $column => $value) {
+            switch ((int) $matchType) {
+                case 2:
+                    $this->_database->like($column, $value, 'after'); // `column` LIKE 'value%'
+                    break;
+                case 3:
+                    $this->_database->like($column, $value); // `column` LIKE '%value%'
+                    break;
+                default:
+                    $this->_database->where($column, $value);
+            }
+        }
+
+        $this->_database->group_end();
     }
 
     private function _paginateSearchFilter($columns)

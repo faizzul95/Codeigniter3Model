@@ -10,7 +10,7 @@ class JoinBuilder
     private $conditions = [];
     private $whereConditions = [];
     private $orWhereConditions = [];
-    private $havingConditions = [];
+    private $orOnConditions = [];
 
     // Valid operators for validation
     private $validOperators = [
@@ -113,16 +113,27 @@ class JoinBuilder
     }
 
     /**
-     * Add OR ON condition
+     * Add an OR ON condition. Kept in its own bucket so apply() can OR it with the
+     * ON group.
      */
     public function orOn($column1, $operator = '=', $column2 = null)
     {
-        $this->on($column1, $operator, $column2);
-        // Mark last condition as OR
-        $lastIndex = count($this->conditions) - 1;
-        if ($lastIndex > 0) {
-            $this->conditions[$lastIndex] = 'OR ' . $this->conditions[$lastIndex];
+        try {
+            if ($column2 === null) {
+                $column2 = $operator;
+                $operator = '=';
+            }
+
+            $column1 = $this->sanitizeColumnName($column1);
+            $column2 = $this->sanitizeColumnName($column2);
+            $operator = $this->validateOperator($operator);
+
+            $this->orOnConditions[] = "{$column1} {$operator} {$column2}";
+        } catch (\Exception $e) {
+            log_message('error', 'Join OR ON condition error: ' . $e->getMessage());
+            throw $e;
         }
+
         return $this;
     }
 
@@ -244,6 +255,29 @@ class JoinBuilder
             $this->orWhereConditions[] = "{$column} IN ({$valuesList})";
         } catch (\Exception $e) {
             log_message('error', 'Join OR WHERE IN condition error: ' . $e->getMessage());
+            throw $e;
+        }
+
+        return $this;
+    }
+
+    /**
+     * Add OR WHERE NOT IN condition. Fills a gap - the other three existed.
+     */
+    public function orWhereNotIn($column, $values)
+    {
+        try {
+            if (!is_array($values) || empty($values)) {
+                throw new \InvalidArgumentException('Values for orWhereNotIn must be a non-empty array');
+            }
+
+            $column = $this->sanitizeColumnName($column);
+            $escapedValues = $this->escapeValue($values);
+            $valuesList = implode(', ', $escapedValues);
+
+            $this->orWhereConditions[] = "{$column} NOT IN ({$valuesList})";
+        } catch (\Exception $e) {
+            log_message('error', 'Join OR WHERE NOT IN condition error: ' . $e->getMessage());
             throw $e;
         }
 
@@ -789,12 +823,14 @@ class JoinBuilder
                 throw new \InvalidArgumentException('Raw condition must be a non-empty string');
             }
 
-            // Simple validation to prevent obvious SQL injection
-            $dangerous = ['DROP', 'DELETE', 'UPDATE', 'INSERT', 'ALTER', 'CREATE', 'TRUNCATE'];
-            foreach ($dangerous as $keyword) {
-                if (stripos($condition, $keyword) !== false) {
-                    throw new \InvalidArgumentException("Dangerous SQL keyword '{$keyword}' detected in raw condition");
-                }
+            // No keyword denylist here. One used to reject any condition containing
+            // CREATE/UPDATE as a substring, which caught `created_at` and
+            // `updated_at`, and it was bypassable anyway. Check statement structure
+            // instead: a real condition never terminates or opens a comment.
+            if (preg_match('/(;|--|\/\*|\*\/|#)/', $condition)) {
+                throw new \InvalidArgumentException(
+                    'Raw condition may not contain statement terminators (;) or SQL comments (--, /*, #).'
+                );
             }
 
             // Replace bindings if provided
@@ -843,34 +879,53 @@ class JoinBuilder
     /**
      * Apply the built join condition to the database
      */
+    /**
+     * Combine one bucket into a fragment: AND-set AND-ed, OR-set OR-ed with it.
+     * Returns '' when both are empty.
+     */
+    private function buildGroup(array $andSet, array $orSet)
+    {
+        $and = $andSet ? implode(' AND ', $andSet) : '';
+        $or = $orSet ? implode(' OR ', $orSet) : '';
+
+        if ($and === '') {
+            return $or === '' ? '' : (count($orSet) > 1 ? '(' . $or . ')' : $or);
+        }
+
+        if ($or === '') {
+            return $and;
+        }
+
+        // Parenthesise both sides so precedence is explicit, never inherited.
+        $left = count($andSet) > 1 ? '(' . $and . ')' : $and;
+        $right = count($orSet) > 1 ? '(' . $or . ')' : $or;
+
+        return '(' . $left . ' OR ' . $right . ')';
+    }
+
+    /**
+     * Apply the built join condition as (ON-group) AND (WHERE-group).
+     *
+     * The groups must stay separate: a flat `(ON AND where) OR orWhere` lets the OR
+     * branch match rows satisfying no join key, silently making the join a partial
+     * cross product.
+     */
     public function apply()
     {
         try {
-            // Combine all conditions
-            $allConditions = [];
+            $onGroup = $this->buildGroup($this->conditions ?: [], $this->orOnConditions ?: []);
+            $whereGroup = $this->buildGroup($this->whereConditions ?: [], $this->orWhereConditions ?: []);
 
-            // Add ON conditions
-            if (!empty($this->conditions)) {
-                $allConditions = array_merge($allConditions, $this->conditions);
-            }
+            $groups = array_values(array_filter([$onGroup, $whereGroup], function ($g) {
+                return $g !== '';
+            }));
 
-            // Add WHERE conditions
-            if (!empty($this->whereConditions)) {
-                $allConditions = array_merge($allConditions, $this->whereConditions);
-            }
-
-            // Add OR WHERE conditions
-            if (!empty($this->orWhereConditions)) {
-                foreach ($this->orWhereConditions as $condition) {
-                    $allConditions[] = 'OR ' . $condition;
-                }
-            }
-
-            if (empty($allConditions)) {
+            if (empty($groups)) {
                 throw new \RuntimeException('No join conditions specified');
             }
 
-            $finalCondition = implode(' AND ', $allConditions);
+            $finalCondition = implode(' AND ', $groups);
+
             $this->db->join($this->table, $finalCondition, $this->type);
         } catch (\Exception $e) {
             log_message('error', 'Join apply error: ' . $e->getMessage());
@@ -887,9 +942,9 @@ class JoinBuilder
             'table' => $this->table,
             'type' => $this->type,
             'on_conditions' => $this->conditions,
+            'or_on_conditions' => $this->orOnConditions,
             'where_conditions' => $this->whereConditions,
             'or_where_conditions' => $this->orWhereConditions,
-            'having_conditions' => $this->havingConditions
         ];
     }
 }
