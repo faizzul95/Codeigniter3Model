@@ -877,9 +877,6 @@ class JoinBuilder
     }
 
     /**
-     * Apply the built join condition to the database
-     */
-    /**
      * Combine one bucket into a fragment: AND-set AND-ed, OR-set OR-ed with it.
      * Returns '' when both are empty.
      */

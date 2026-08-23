@@ -17,6 +17,7 @@ use OnlyPHP\Codeigniter3Model\Components\JoinBuilder;
  * @link      https://github.com/faizzul95/MY_Model
  */
 
+#[\AllowDynamicProperties]
 class CI3_Model extends \CI_Model
 {
     use EagerQuery, PaginateQuery;
@@ -56,9 +57,16 @@ class CI3_Model extends \CI_Model
 
     /**
      * @var null|array
-     * Sets fillable fields.
-     * If value is set as null, the $fillable property will be set as an array with all the table fields (except the primary key) as elements.
-     * If value is set as an array, there won't be any changes done to it (ie: no field of the table will be updated or inserted).
+     * Mass-assignment allowlist.
+     *
+     *   null (default) - auto-populated from the table's columns, minus the primary
+     *                    key and the timestamp columns.
+     *   ['a','b']      - only these columns can be inserted or updated.
+     *   []             - NOT a lock-down. An empty array disables the allowlist, so
+     *                    every submitted key passes through (minus $guarded).
+     *                    To block everything, list the columns you do allow.
+     *
+     * $guarded is applied after this list, in both cases.
      */
     public $fillable = null;
 
@@ -99,6 +107,9 @@ class CI3_Model extends \CI_Model
     protected $_indexType = 'USE INDEX';
     /** @var bool One-shot opt-in for an unqualified mass write (destroyAll/patchAll). */
     protected $_allowUnqualifiedWrite = false;
+
+    /** @var string[] Columns currently exposed as properties for an accessor call. */
+    private $_appendedAttributes = [];
 
     private $ci;
 
@@ -1517,17 +1528,21 @@ class CI3_Model extends \CI_Model
 
     private function _withTrashQueryFilter()
     {
-        if ($this->softDelete) {
-            switch ($this->_trashed) {
-                case 'only':
-                    $this->whereNotNull($this->table . '.' . $this->deleted_at);
-                    break;
-                case 'without':
-                    $this->whereNull($this->table . '.' . $this->deleted_at);
-                    break;
-                case 'with':
-                    break;
-            }
+        if (!$this->softDelete) {
+            return;
+        }
+
+        $column = $this->table . '.' . $this->deleted_at;
+
+        switch ($this->_trashed) {
+            case 'only':
+                $this->_database->where($column . ' IS NOT NULL');
+                break;
+            case 'without':
+                $this->_database->where($column . ' IS NULL');
+                break;
+            case 'with':
+                break;
         }
     }
 
@@ -2113,13 +2128,20 @@ class CI3_Model extends \CI_Model
             // no WHERE, so a soft-delete model has no safety net of its own.
             $this->_assertHasConditions('destroyAll');
 
-            // Primary key only, relations off - a full read here would hydrate every
-            // column and relation just to report them back.
+            // Bounded key sample for the response only; affected_rows() below is the
+            // real count. A full read here would hydrate every column and relation.
+            $sampleLimit = 1000;
+
             $probe = clone $this;
             $probe->eagerLoad = [];
             $probe->aggregateRelations = [];
+            $probe->maxRows = 0; // bounded by limit() below, not by the row guard
+
             $ids = array_column(
-                (array) $probe->withTrashed()->toArray()->select($this->primaryKey)->get(),
+                (array) $probe->withTrashed()->toArray()
+                    ->select($this->primaryKey)
+                    ->limit($sampleLimit)
+                    ->get(),
                 $this->primaryKey
             );
             unset($probe);
@@ -2135,6 +2157,9 @@ class CI3_Model extends \CI_Model
                 $success = $this->_database->delete($this->table);
             }
 
+            // Correct even when the key sample above was truncated.
+            $affected = (int) $this->_database->affected_rows();
+
             $this->resetQuery();
 
             if (!$success) {
@@ -2144,7 +2169,11 @@ class CI3_Model extends \CI_Model
             return [
                 'code' => 200,
                 'id' => $ids,
-                'data' => ['affected' => count($ids), 'ids' => $ids],
+                'data' => [
+                    'affected' => $affected,
+                    'ids' => $ids,
+                    'ids_truncated' => ($affected > count($ids)),
+                ],
                 'message' => 'Removed successfully',
                 'action' => 'delete'
             ];
@@ -2257,6 +2286,16 @@ class CI3_Model extends \CI_Model
         // Local copies - never mutate the model's own fillable/protected config.
         $fillable = is_array($this->fillable) ? $this->fillable : [];
         $protected = is_array($this->protected) ? $this->protected : [];
+
+        // An empty $fillable disables the allowlist rather than blocking everything,
+        // which is easy to mistake for a lock-down.
+        if ($fillable === [] && $protected === []) {
+            log_message(
+                'error',
+                "Mass assignment on `{$this->table}` is unrestricted: both \$fillable and \$protected are empty, "
+                    . 'so every submitted key is written. List the columns you allow in $fillable.'
+            );
+        }
 
         if (!empty($includeKey)) {
             $fillable[] = $includeKey;
@@ -2637,13 +2676,17 @@ class CI3_Model extends \CI_Model
         // not escaping: a backtick inside the name closes the quote and the rest is
         // executed as SQL.
         $processedColumn = $this->validateIdentifier($processedColumn, 'date/time condition');
+        $bare = str_replace('`', '', $processedColumn);
 
-        if (strpos($processedColumn, '.') === false) {
-            $processedColumn = "`{$this->table}`.`{$processedColumn}`";
-        } else {
-            $parts = explode('.', str_replace('`', '', $processedColumn));
-            $processedColumn = "`{$parts[0]}`.`{$parts[1]}`";
+        if ($bare === '*') {
+            return ['*', $alias];
         }
+
+        $parts = strpos($bare, '.') === false
+            ? [$this->table, $bare]
+            : explode('.', $bare);
+
+        $processedColumn = '`' . implode('`.`', $parts) . '`';
 
         return [$processedColumn, $alias];
     }
@@ -2830,10 +2873,11 @@ class CI3_Model extends \CI_Model
             return $column;
         }
 
-        if (!preg_match('/^[A-Za-z_][A-Za-z0-9_]*(\.[A-Za-z_][A-Za-z0-9_]*)?$/', $candidate)) {
+        // Up to three segments (schema.table.column); each must be a bare identifier.
+        if (!preg_match('/^[A-Za-z_][A-Za-z0-9_$]*(\.[A-Za-z_][A-Za-z0-9_$]*){0,2}$/', $candidate)) {
             throw new \InvalidArgumentException(
-                "Invalid column name for {$context}: '{$column}'. Expected 'column' or 'table.column'. "
-                    . 'Use selectRaw()/havingRaw() for expressions.'
+                "Invalid column name for {$context}: '{$column}'. Expected 'column', 'table.column' "
+                    . "or 'schema.table.column'. Use selectRaw()/havingRaw() for expressions."
             );
         }
 
@@ -2901,10 +2945,14 @@ class CI3_Model extends \CI_Model
     }
 
     /**
-     * Checks if an array is multidimensional.
+     * Is $data a batch of rows rather than a single row?
      *
-     * @param mixed $data The array to check.
-     * @return bool True if the array is multidimensional, false otherwise.
+     * A batch has integer keys and an array for every value. A single row has at
+     * least one string key, so a row containing a JSON or array column is not
+     * mistaken for a batch.
+     *
+     * @param mixed $data
+     * @return bool
      */
     private function _isMultidimensional($data)
     {
@@ -2912,13 +2960,13 @@ class CI3_Model extends \CI_Model
             return false;
         }
 
-        foreach ($data as $value) {
-            if (is_array($value)) {
-                return true;
+        foreach ($data as $key => $value) {
+            if (!is_int($key) || !is_array($value)) {
+                return false;
             }
         }
 
-        return false;
+        return true;
     }
 
     /**
@@ -3023,13 +3071,6 @@ class CI3_Model extends \CI_Model
     }
 
     /**
-     * Resets internal query builder state for a CodeIgniter 3 database instance.
-     *
-     * @param object $db         The DB instance (CI_DB_*_driver or subclass).
-     * @param array  $properties Properties to reset (default: core QB properties).
-     * @return void
-     */
-    /**
      * Default CodeIgniter query-builder properties reached via reflection.
      */
     private const QB_PROPERTIES = [
@@ -3072,6 +3113,13 @@ class CI3_Model extends \CI_Model
         return $cache[$key] = $reflectedProps;
     }
 
+    /**
+     * Resets internal query builder state for a CodeIgniter 3 database instance.
+     *
+     * @param object $db         The DB instance (CI_DB_*_driver or subclass).
+     * @param array  $properties Properties to reset (default: core QB properties).
+     * @return void
+     */
     protected function resetQueryBuilderState(&$db, $properties = [])
     {
         $properties = empty($properties) ? self::QB_PROPERTIES : $properties;
@@ -3221,12 +3269,6 @@ class CI3_Model extends \CI_Model
     }
 
     /**
-     * Forces MySQL to use specific indexes for the query
-     *
-     * @param string|array $indexName Index name or array of index names
-     * @return $this
-     */
-    /**
      * Validate and join index names. getTableWithIndex() interpolates the result
      * straight into the FROM clause.
      *
@@ -3249,6 +3291,12 @@ class CI3_Model extends \CI_Model
         return implode(', ', $clean);
     }
 
+    /**
+     * Forces MySQL to use specific indexes for the query
+     *
+     * @param string|array $indexName Index name or array of index names
+     * @return $this
+     */
     public function forceIndex($indexName = [])
     {
         if (empty($indexName)) {
@@ -3645,18 +3693,52 @@ class CI3_Model extends \CI_Model
         $this->unsetAttributes();
     }
 
+    /**
+     * Expose a row's columns as properties for getXAttribute() accessors.
+     *
+     * Columns colliding with a declared property are skipped: setting them
+     * overwrote model config, and unset() then deleted the property outright.
+     *
+     * @param array $data
+     * @return void
+     */
     private function setAttributes($data)
     {
-        foreach ($this->fillable as $attribute) {
+        $this->_appendedAttributes = [];
+
+        foreach ((array) $this->fillable as $attribute) {
+            if (!is_string($attribute) || $attribute === '') {
+                continue;
+            }
+
+            if (property_exists($this, $attribute)) {
+                if ($this->debug) {
+                    log_message(
+                        'error',
+                        "Column `{$attribute}` on `{$this->table}` collides with a model property and is not "
+                            . 'exposed to accessors. Rename the column or the property if an accessor needs it.'
+                    );
+                }
+                continue;
+            }
+
             $this->$attribute = $data[$attribute] ?? null;
+            $this->_appendedAttributes[] = $attribute;
         }
     }
 
+    /**
+     * Remove only the properties setAttributes() created.
+     *
+     * @return void
+     */
     private function unsetAttributes()
     {
-        foreach ($this->fillable as $attribute) {
+        foreach ($this->_appendedAttributes as $attribute) {
             unset($this->$attribute);
         }
+
+        $this->_appendedAttributes = [];
     }
 
     public function __destruct()

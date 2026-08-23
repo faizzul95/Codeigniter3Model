@@ -224,12 +224,13 @@ trait PaginateQuery
             return;
         }
 
-        // $matchType : 1-Match Exactly (default), 2-Match Beginning, 3-Match Anywhere 
-        if ($this->_isMultidimensional($condition)) {
-            $matchType = $condition['filter_type'] ?? 1; // Default to exact match
-            $condition = $condition['filter'] ?? [];
+        // Accepts a flat [column => value] map, or ['filter_type' => 1|2|3,
+        // 'filter' => [column => value]]. matchType: 1 exact, 2 prefix, 3 anywhere.
+        if (is_array($condition) && array_key_exists('filter', $condition) && is_array($condition['filter'])) {
+            $matchType = $condition['filter_type'] ?? 1;
+            $condition = $condition['filter'];
         } else {
-            $matchType = 1; // Default to exact match
+            $matchType = 1;
         }
 
         $filterData = [];
