@@ -192,7 +192,7 @@ trait EagerQuery
             $parentRelation = implode('.', $parts);
 
             return $this->whereHas($parentRelation, function ($query) use ($nestedRelation, $column) {
-                $query->whereNull($nestedRelation, $column);
+                $query->whereNullRelation($nestedRelation, $column);
             });
         }
 
@@ -209,7 +209,7 @@ trait EagerQuery
             $parentRelation = implode('.', $parts);
 
             return $this->orWhereHas($parentRelation, function ($query) use ($nestedRelation, $column) {
-                $query->whereNull($nestedRelation, $column);
+                $query->whereNullRelation($nestedRelation, $column);
             });
         }
 
@@ -226,7 +226,7 @@ trait EagerQuery
             $parentRelation = implode('.', $parts);
 
             return $this->whereHas($parentRelation, function ($query) use ($nestedRelation, $column) {
-                $query->whereNotNull($nestedRelation, $column);
+                $query->whereNotNullRelation($nestedRelation, $column);
             });
         }
 
@@ -243,7 +243,7 @@ trait EagerQuery
             $parentRelation = implode('.', $parts);
 
             return $this->orWhereHas($parentRelation, function ($query) use ($nestedRelation, $column) {
-                $query->whereNotNull($nestedRelation, $column);
+                $query->whereNotNullRelation($nestedRelation, $column);
             });
         }
 
@@ -710,6 +710,24 @@ trait EagerQuery
 
     public function withAggregate($relations, $function, $column = '*', $alias = null)
     {
+        // $function is interpolated straight into "SELECT {$function}(".
+        $allowedFunctions = ['count', 'sum', 'avg', 'min', 'max'];
+        $function = strtolower(trim((string) $function));
+
+        if (!in_array($function, $allowedFunctions, true)) {
+            throw new \InvalidArgumentException(
+                "Invalid aggregate function '{$function}'. Allowed: " . implode(', ', $allowedFunctions) . '.'
+            );
+        }
+
+        if ($column !== '*' && !preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', (string) $column)) {
+            throw new \InvalidArgumentException("Invalid aggregate column '{$column}'.");
+        }
+
+        if ($alias !== null && !preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', (string) $alias)) {
+            throw new \InvalidArgumentException("Invalid aggregate alias '{$alias}'.");
+        }
+
         $relationMap = [];
 
         // Process relations to standardize format
@@ -980,7 +998,9 @@ trait EagerQuery
                 ? (clone $model)->where($column, $chunk[0])->get()
                 : (clone $model)->whereIn($column, $chunk)->get();
 
-            array_push($result, ...$chunkResult);
+            // Not array_push(...spread): that builds a 1000-argument call per chunk
+            // and raises an Error when the rows are objects rather than a list.
+            $result = array_merge($result, is_array($chunkResult) ? $chunkResult : [$chunkResult]);
         }
 
         return $result;
@@ -1025,17 +1045,6 @@ trait EagerQuery
                 }
             }
         }
-    }
-
-    private function hasAggregate($relation, $type, $column = '*')
-    {
-        foreach ($this->aggregateRelations as $aggregate) {
-            if ($aggregate['relation'] === $relation && $aggregate['type'] === $type && $aggregate['column'] === $column) {
-                return true;
-            }
-        }
-
-        return false;
     }
 
     private function _addAggregateRelation($type, $relation, $column, $alias = null, $callback = null)

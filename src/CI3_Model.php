@@ -17,6 +17,7 @@ use OnlyPHP\Codeigniter3Model\Components\JoinBuilder;
  * @link      https://github.com/faizzul95/MY_Model
  */
 
+#[\AllowDynamicProperties]
 class CI3_Model extends \CI_Model
 {
     use EagerQuery, PaginateQuery;
@@ -56,9 +57,16 @@ class CI3_Model extends \CI_Model
 
     /**
      * @var null|array
-     * Sets fillable fields.
-     * If value is set as null, the $fillable property will be set as an array with all the table fields (except the primary key) as elements.
-     * If value is set as an array, there won't be any changes done to it (ie: no field of the table will be updated or inserted).
+     * Mass-assignment allowlist.
+     *
+     *   null (default) - auto-populated from the table's columns, minus the primary
+     *                    key and the timestamp columns.
+     *   ['a','b']      - only these columns can be inserted or updated.
+     *   []             - NOT a lock-down. An empty array disables the allowlist, so
+     *                    every submitted key passes through (minus $guarded).
+     *                    To block everything, list the columns you do allow.
+     *
+     * $guarded is applied after this list, in both cases.
      */
     public $fillable = null;
 
@@ -88,16 +96,28 @@ class CI3_Model extends \CI_Model
     public $_validationLang = 'english'; // used to set validation language for error message, default is english
     public $debug = false; // used to set debug mode
 
+    /**
+     * @var int Refuse a get() that would return more rows than this, instead of
+     *          exhausting memory. 0 disables the check. Set it on models whose
+     *          tables can grow large; use chunk()/cursor()/lazy() to read past it.
+     */
+    public $maxRows = 0;
+
     protected $_indexString = null;
     protected $_indexType = 'USE INDEX';
-    protected $_suggestIndexEnabled = false;
+    /** @var bool One-shot opt-in for an unqualified mass write (destroyAll/patchAll). */
+    protected $_allowUnqualifiedWrite = false;
+
+    /** @var string[] Columns currently exposed as properties for an accessor call. */
+    private $_appendedAttributes = [];
 
     private $ci;
 
     public function __construct()
     {
         $this->ci = &get_instance();
-        $this->db = $this->ci->load->database($this->connection, TRUE);
+        // Also points $this->db at the same handle - a second load->database()
+        // call would open a second, unused connection per model instance.
         $this->_set_connection();
         $this->_set_timezone();
         $this->_fetch_table();
@@ -145,19 +165,47 @@ class CI3_Model extends \CI_Model
     }
 
     /**
-     * Select raw expression for the query (Laravel-style)
+     * Select a raw expression.
      *
-     * @param string $expression Raw SQL string with optional bindings (?)
-     * @param array $bindings Bindings to safely escape
+     * UNESCAPED. $expression is emitted verbatim - never build it from request data.
+     * Pass values through $bindings, which are escaped.
+     *
+     * @param string $expression Raw SQL, with ? placeholders for $bindings
+     * @param array $bindings Values, escaped before substitution
      * @return $this
      */
     public function selectRaw($expression, array $bindings = [])
     {
-        // If bindings are provided, bind them safely using CodeIgniter's built-in methods
         if (!empty($bindings)) {
-            $expression = vsprintf(str_replace('?', '%s', $expression), array_map(function ($value) {
-                return $this->_database->escape(trim($value));
-            }, $bindings));
+            // Left-to-right '?' substitution. Do not use vsprintf here: it reads a
+            // literal '%' in the expression as a printf conversion.
+            $index = 0;
+            $count = count($bindings);
+            $values = array_values($bindings);
+
+            $expression = preg_replace_callback('/\?/', function () use (&$index, $values, $count) {
+                if ($index >= $count) {
+                    throw new \InvalidArgumentException('selectRaw(): more ? placeholders than bindings supplied.');
+                }
+
+                $value = $values[$index++];
+
+                // escapeValue() maps arrays element-wise, which would concatenate
+                // as "Array".
+                if (is_array($value) || is_object($value)) {
+                    throw new \InvalidArgumentException(
+                        'selectRaw(): bindings must be scalar or null, ' . gettype($value) . ' given.'
+                    );
+                }
+
+                return $this->escapeValue($value);
+            }, $expression);
+
+            if ($index !== $count) {
+                throw new \InvalidArgumentException(
+                    "selectRaw(): {$count} bindings supplied but {$index} ? placeholders found."
+                );
+            }
         }
 
         $this->_database->select($expression, false); // false disables escaping
@@ -230,27 +278,29 @@ class CI3_Model extends \CI_Model
         return $this;
     }
 
+    // The NULL family concatenates the column into a condition string, so the name
+    // has to be validated before it gets there.
     public function whereNull($column)
     {
-        $this->_database->where($column . ' IS NULL');
+        $this->_database->where($this->validateIdentifier($column, 'whereNull') . ' IS NULL');
         return $this;
     }
 
     public function orWhereNull($column)
     {
-        $this->_database->or_where($column . ' IS NULL');
+        $this->_database->or_where($this->validateIdentifier($column, 'orWhereNull') . ' IS NULL');
         return $this;
     }
 
     public function whereNotNull($column)
     {
-        $this->_database->where($column . ' IS NOT NULL');
+        $this->_database->where($this->validateIdentifier($column, 'whereNotNull') . ' IS NOT NULL');
         return $this;
     }
 
     public function orWhereNotNull($column)
     {
-        $this->_database->or_where($column . ' IS NOT NULL');
+        $this->_database->or_where($this->validateIdentifier($column, 'orWhereNotNull') . ' IS NOT NULL');
         return $this;
     }
 
@@ -289,6 +339,10 @@ class CI3_Model extends \CI_Model
             $operator = '=';
         }
 
+        $first = $this->validateIdentifier($first, 'whereColumn');
+        $second = $this->validateIdentifier($second, 'whereColumn');
+        $operator = $this->validateOperator($operator, 'whereColumn');
+
         $this->_database->where("$first $operator $second", NULL, FALSE);
         return $this;
     }
@@ -300,30 +354,86 @@ class CI3_Model extends \CI_Model
             $operator = '=';
         }
 
+        $first = $this->validateIdentifier($first, 'orWhereColumn');
+        $second = $this->validateIdentifier($second, 'orWhereColumn');
+        $operator = $this->validateOperator($operator, 'orWhereColumn');
+
         $this->_database->or_where("$first $operator $second", NULL, FALSE);
         return $this;
     }
 
+    /**
+     * Add a negated WHERE clause. Two-arg form treats $operator as the value.
+     *
+     * @return $this
+     */
     public function whereNot($column, $operator = null, $value = null)
     {
-        $this->where($column, $operator, $value)->where($column . ' IS NOT', null);
+        if ($value === null) {
+            $value = $operator;
+            $operator = '=';
+        }
+
+        $this->applyCondition('where', $this->validateIdentifier($column, 'whereNot'), $value, $this->_negateOperator($operator));
         return $this;
     }
 
+    /**
+     * Add a negated OR WHERE clause. Two-arg form treats $operator as the value.
+     *
+     * @return $this
+     */
     public function orWhereNot($column, $operator = null, $value = null)
     {
-        $this->orWhere($column, $operator, $value)->orWhere($column . ' IS NOT', null);
+        if ($value === null) {
+            $value = $operator;
+            $operator = '=';
+        }
+
+        $this->applyCondition('or_where', $this->validateIdentifier($column, 'orWhereNot'), $value, $this->_negateOperator($operator));
         return $this;
+    }
+
+    /**
+     * Map an operator to its negation.
+     *
+     * @throws \InvalidArgumentException
+     */
+    private function _negateOperator($operator)
+    {
+        $map = [
+            '=' => '!=',
+            '!=' => '=',
+            '<>' => '=',
+            '>' => '<=',
+            '>=' => '<',
+            '<' => '>=',
+            '<=' => '>',
+            'LIKE' => 'NOT LIKE',
+            'NOT LIKE' => 'LIKE',
+        ];
+
+        $upper = strtoupper(trim((string) $operator));
+
+        if (!isset($map[$upper])) {
+            throw new \InvalidArgumentException(
+                "Cannot negate operator '{$operator}'. Supported: " . implode(', ', array_keys($map)) . '.'
+            );
+        }
+
+        return $map[$upper];
     }
 
     public function whereJsonContains($column, $value)
     {
+        $column = $this->validateIdentifier($column, 'whereJsonContains');
         $this->_database->where("JSON_CONTAINS($column, " . $this->escapeValue(json_encode($value)) . ")", NULL, FALSE);
         return $this;
     }
 
     public function orWhereJsonContains($column, $value)
     {
+        $column = $this->validateIdentifier($column, 'orWhereJsonContains');
         $this->_database->or_where("JSON_CONTAINS($column, " . $this->escapeValue(json_encode($value)) . ")", NULL, FALSE);
         return $this;
     }
@@ -492,24 +602,28 @@ class CI3_Model extends \CI_Model
 
     public function whereBetween($column, $start, $end)
     {
+        $column = $this->validateIdentifier($column, 'whereBetween');
         $this->_database->where("$column BETWEEN {$this->escapeValue($start)} AND {$this->escapeValue($end)}");
         return $this;
     }
 
     public function whereNotBetween($column, $start, $end)
     {
+        $column = $this->validateIdentifier($column, 'whereNotBetween');
         $this->_database->where("$column NOT BETWEEN {$this->escapeValue($start)} AND {$this->escapeValue($end)}");
         return $this;
     }
 
     public function orWhereBetween($column, $start, $end)
     {
+        $column = $this->validateIdentifier($column, 'orWhereBetween');
         $this->_database->or_where("$column BETWEEN {$this->escapeValue($start)} AND {$this->escapeValue($end)}");
         return $this;
     }
 
     public function orWhereNotBetween($column, $start, $end)
     {
+        $column = $this->validateIdentifier($column, 'orWhereNotBetween');
         $this->_database->or_where("$column NOT BETWEEN {$this->escapeValue($start)} AND {$this->escapeValue($end)}");
         return $this;
     }
@@ -528,11 +642,17 @@ class CI3_Model extends \CI_Model
     }
 
     /**
-     * Execute a raw SQL query
+     * Execute a raw SQL query.
      *
-     * @param string $query Raw SQL query
-     * @param array $binding Binding parameters
-     * @return $this
+     * UNESCAPED. $query is emitted verbatim - never build it from request data. Pass
+     * values through $binding, which are escaped.
+     *
+     * Bypasses every model concern: no soft-delete filter, no relation loading, no
+     * formatting, no state reset. Chained builder state is left in place.
+     *
+     * @param string $query Raw SQL, with ? placeholders for $binding
+     * @param array $binding Values, escaped before substitution
+     * @return \CI_DB_result Result object, not $this.
      */
     public function rawQuery($query, $binding = [])
     {
@@ -549,7 +669,7 @@ class CI3_Model extends \CI_Model
             }
 
             // Validate join type
-            $validTypes = ['inner', 'left', 'right', 'outer', 'full', 'full outer'];
+            $validTypes = ['inner', 'left', 'right', 'outer', 'full', 'full outer', 'cross'];
             if (!in_array(strtolower($type), $validTypes)) {
                 throw new \InvalidArgumentException("Invalid join type '{$type}'. Valid types: " . implode(', ', $validTypes));
             }
@@ -639,18 +759,33 @@ class CI3_Model extends \CI_Model
         return $this;
     }
 
+    /**
+     * UNESCAPED. $expression is emitted verbatim - never build it from request data.
+     */
     public function groupByRaw($expression)
     {
         $this->_database->group_by($expression, FALSE);
         return $this;
     }
 
+    /**
+     * Add a HAVING clause.
+     *
+     * Note the argument order is ($column, $value, $operator) - not Laravel's
+     * ($column, $operator, $value).
+     */
     public function having($column, $value, $operator = '=')
     {
+        $column = $this->validateIdentifier($column, 'having');
+        $operator = $this->validateOperator($operator, 'having');
+
         $this->_database->having("$column $operator", $value);
         return $this;
     }
 
+    /**
+     * UNESCAPED. $condition is emitted verbatim - never build it from request data.
+     */
     public function havingRaw($condition)
     {
         $this->_database->having($condition, NULL, FALSE);
@@ -672,10 +807,6 @@ class CI3_Model extends \CI_Model
         try {
             if (empty($key) && !is_callable($key)) {
                 throw new \Exception('The key or callback is required.');
-            }
-
-            if ($this->doesntExist()) {
-                return [];
             }
 
             $results = [];
@@ -737,10 +868,6 @@ class CI3_Model extends \CI_Model
                 throw new \Exception('Sorting criteria are required as array.');
             }
 
-            if ($this->doesntExist()) {
-                return [];
-            }
-
             $results = $this->get();
             return $this->_multiSort($results, $criteria);
         } catch (\Exception $e) {
@@ -781,10 +908,6 @@ class CI3_Model extends \CI_Model
             throw new \InvalidArgumentException('The provided filter callback must be callable.');
         }
 
-        if ($this->doesntExist()) {
-            return [];
-        }
-
         $filtered = [];
 
         $this->chunk($chunkSize, function ($results) use (&$filtered, $callback) {
@@ -817,10 +940,6 @@ class CI3_Model extends \CI_Model
             }
 
             $values = [];
-
-            if ($this->doesntExist()) {
-                return $values;
-            }
 
             $this->chunk(500, function ($results) use (&$values, $column, $key) {
                 foreach ($results as $result) {
@@ -885,19 +1004,7 @@ class CI3_Model extends \CI_Model
 
         while (true) {
 
-            // Restore the original query conditions
-            $this->_database = clone $originalState['db'];
-
-            // Restore model state
-            $this->connection = $originalState['connection'];
-            $this->table = $originalState['table'];
-            $this->primaryKey = $originalState['primaryKey'];
-            $this->relations = $originalState['relations'] ?? [];
-            $this->eagerLoad = $originalState['eagerLoad'] ?? [];
-            $this->returnType = $originalState['returnType'];
-            $this->_paginateColumn = $originalState['_paginateColumn'] ?? [];
-            $this->_indexString = $originalState['index'] ?? null;
-            $this->_indexType = $originalState['indexType'] ?? 'USE INDEX';
+            $this->_restoreDatabaseSettings($originalState);
 
             // Log query execution start time
             $startTime = microtime(true);
@@ -935,9 +1042,7 @@ class CI3_Model extends \CI_Model
 
             // Memory cleanup
             unset($results);
-            if (function_exists('gc_collect_cycles')) gc_collect_cycles();
 
-            usleep(1500);
         }
 
         // Reset internal properties
@@ -1037,7 +1142,6 @@ class CI3_Model extends \CI_Model
             $collection = new LazyCollection($source);
             $collection->setChunkSize($chunkSize);
 
-            if (function_exists('gc_collect_cycles')) gc_collect_cycles();
 
             return $collection;
         } catch (\Exception $e) {
@@ -1071,19 +1175,7 @@ class CI3_Model extends \CI_Model
         }
 
         while (true) {
-            // Restore the original query conditions by cloning
-            $this->_database = clone $originalState['db'];
-
-            // Restore the original model state
-            $this->connection = $originalState['connection'];
-            $this->table = $originalState['table'];
-            $this->primaryKey = $originalState['primaryKey'];
-            $this->relations = $originalState['relations'] ?? [];
-            $this->eagerLoad = $originalState['eagerLoad'] ?? [];
-            $this->returnType = $originalState['returnType'];
-            $this->_paginateColumn = $originalState['_paginateColumn'] ?? [];
-            $this->_indexString = $originalState['index'] ?? null;
-            $this->_indexType = $originalState['indexType'] ?? 'USE INDEX';
+            $this->_restoreDatabaseSettings($originalState);
 
             // Log query execution start time
             $startTime = microtime(true);
@@ -1114,7 +1206,11 @@ class CI3_Model extends \CI_Model
 
             // Update lastId for seek-based pagination
             if ($isIndexed) {
-                $lastId = end($results)[$this->primaryKey];  // Get the last item's primary key
+                    $last = end($results);
+                $lastId = is_array($last) ? ($last[$this->primaryKey] ?? null) : (is_object($last) ? ($last->{$this->primaryKey} ?? null) : null);
+                if ($lastId === null) {
+                    break; // cannot advance a keyset cursor without the key
+                }
             } else {
                 $offset += $size;
             }
@@ -1123,9 +1219,6 @@ class CI3_Model extends \CI_Model
             unset($results);
         }
 
-        if (function_exists('gc_collect_cycles')) {
-            gc_collect_cycles();
-        }
 
         // Reset internal properties for next query
         $this->resetQuery();
@@ -1333,6 +1426,8 @@ class CI3_Model extends \CI_Model
                 $this->_logQueryPerformance($this->_database->last_query());
             }
 
+            $this->_assertWithinMaxRows($query);
+
             // Convert to Array
             $result = $query->result_array();
 
@@ -1345,9 +1440,6 @@ class CI3_Model extends \CI_Model
             if (!empty($result)) {
                 $result = $this->loadRelations($result);
 
-                if (function_exists('gc_collect_cycles')) {
-                    gc_collect_cycles();
-                }
             }
 
             $formattedResult = $this->formatResult($result);
@@ -1390,9 +1482,6 @@ class CI3_Model extends \CI_Model
             if (!empty($result)) {
                 $result = $this->loadRelations([$result]);
 
-                if (function_exists('gc_collect_cycles')) {
-                    gc_collect_cycles();
-                }
             }
 
             $formattedResult = $this->formatResult($result[0] ?? NULL);
@@ -1439,17 +1528,21 @@ class CI3_Model extends \CI_Model
 
     private function _withTrashQueryFilter()
     {
-        if ($this->softDelete) {
-            switch ($this->_trashed) {
-                case 'only':
-                    $this->whereNotNull($this->table . '.' . $this->deleted_at);
-                    break;
-                case 'without':
-                    $this->whereNull($this->table . '.' . $this->deleted_at);
-                    break;
-                case 'with':
-                    break;
-            }
+        if (!$this->softDelete) {
+            return;
+        }
+
+        $column = $this->table . '.' . $this->deleted_at;
+
+        switch ($this->_trashed) {
+            case 'only':
+                $this->_database->where($column . ' IS NOT NULL');
+                break;
+            case 'without':
+                $this->_database->where($column . ' IS NULL');
+                break;
+            case 'with':
+                break;
         }
     }
 
@@ -1708,7 +1801,9 @@ class CI3_Model extends \CI_Model
                 throw new \Exception('No records to insert.');
             }
 
-            $this->_database->trans_begin(); // Begin a transaction
+            $inTransaction = false;
+            $this->_database->trans_begin();
+            $inTransaction = true;
 
             // Perform batch insert
             $success = $this->_database->insert_batch($this->table, $batchData);
@@ -1718,9 +1813,10 @@ class CI3_Model extends \CI_Model
             }
 
             $lastInsertId = $this->_database->insert_id();
-            $this->resetQuery();
 
             $this->_database->trans_commit();
+            $inTransaction = false;
+            $this->resetQuery();
 
             return [
                 'code' => 200,
@@ -1730,7 +1826,11 @@ class CI3_Model extends \CI_Model
                 'action' => 'create'
             ];
         } catch (\Exception $e) {
-            $this->_database->trans_rollback();
+            // Only roll back what this method opened - the throws above happen
+            // before trans_begin().
+            if (!empty($inTransaction)) {
+                $this->_database->trans_rollback();
+            }
             if ($this->debug) log_message('error', "Batch creation error in table {$this->table}: " . $e->getMessage());
             return [
                 'code' => 422,
@@ -1811,47 +1911,57 @@ class CI3_Model extends \CI_Model
     public function patchAll($data)
     {
         try {
+            // Without conditions this rewrites every row in the table. See destroyAll().
+            $this->_assertHasConditions('patchAll');
+
             if ($this->doesntExist()) {
                 throw new \Exception('No record found');
             }
 
             $primaryKey = $this->primaryKey;
-            $listIdsSuccess = [];
-            $listIdsFailed = [];
+            $successCount = 0;
+            $failCount = 0;
+            // Bounded sample. Returning every id used hundreds of MB on large updates.
+            $sampleLimit = 1000;
+            $successSample = [];
+            $failedSample = [];
 
-            $this->chunk(1000, function ($results) use (&$listIdsSuccess, &$listIdsFailed, $data, $primaryKey) {
+            $this->chunk(1000, function ($results) use (&$successCount, &$failCount, &$successSample, &$failedSample, $sampleLimit, $data, $primaryKey) {
 
                 $updateData = [];
                 foreach ($results as $record) {
-                    $patchedData = $data;
-                    $patchedData[$primaryKey] = $record[$primaryKey];
-                    $updateData[] = $patchedData;
+                    $updateData[] = [$primaryKey => $record[$primaryKey]] + $data;
                 }
 
                 $result = $this->batchPatch($updateData, $primaryKey);
 
                 if ($result['code'] === 200) {
-                    $listIdsSuccess = array_merge($listIdsSuccess, $result['id']);
+                    $successCount += count($result['id']);
+                    if (count($successSample) < $sampleLimit) {
+                        $successSample = array_slice(array_merge($successSample, $result['id']), 0, $sampleLimit);
+                    }
                 } else {
                     $failedIds = array_column($updateData, $primaryKey);
-                    $listIdsFailed = array_merge($listIdsFailed, $failedIds);
+                    $failCount += count($failedIds);
+                    if (count($failedSample) < $sampleLimit) {
+                        $failedSample = array_slice(array_merge($failedSample, $failedIds), 0, $sampleLimit);
+                    }
                 }
 
                 return true;
             });
 
-            $totalSuccess = count($listIdsSuccess);
-
             return [
-                'code' => $totalSuccess > 0 ? 200 : 422,
-                'id' => $totalSuccess > 0 ? $listIdsSuccess : null,
+                'code' => $successCount > 0 ? 200 : 422,
+                'id' => $successCount > 0 ? $successSample : null,
                 'data' => [
-                    'successful_ids' => $listIdsSuccess,
-                    'failed_ids' => $listIdsFailed,
-                    'success_count' => count($listIdsSuccess),
-                    'fail_count' => count($listIdsFailed)
+                    'successful_ids' => $successSample,
+                    'failed_ids' => $failedSample,
+                    'success_count' => $successCount,
+                    'fail_count' => $failCount,
+                    'ids_truncated' => ($successCount > $sampleLimit || $failCount > $sampleLimit),
                 ],
-                'message' => $totalSuccess > 0 ? 'Updated successfully' : 'No records updated',
+                'message' => $successCount > 0 ? 'Updated successfully' : 'No records updated',
                 'action' => 'update'
             ];
         } catch (\Exception $e) {
@@ -1915,7 +2025,9 @@ class CI3_Model extends \CI_Model
                 throw new \Exception('No records to update.');
             }
 
-            $this->_database->trans_begin(); // Begin a transaction
+            $inTransaction = false;
+            $this->_database->trans_begin();
+            $inTransaction = true;
 
             // Perform batch update
             $success = $this->_database->update_batch($this->table, $batchData, $keyColumn);
@@ -1925,6 +2037,7 @@ class CI3_Model extends \CI_Model
             }
 
             $this->_database->trans_commit();
+            $inTransaction = false;
             $this->resetQuery();
 
             return [
@@ -1935,7 +2048,10 @@ class CI3_Model extends \CI_Model
                 'action' => 'update'
             ];
         } catch (\Exception $e) {
-            $this->_database->trans_rollback(); // Rollback the transaction
+            // Only roll back what this method opened.
+            if (!empty($inTransaction)) {
+                $this->_database->trans_rollback();
+            }
             if ($this->debug) log_message('error', "Batch update error in table {$this->table}: " . $e->getMessage());
             return [
                 'code' => 422,
@@ -2008,10 +2124,29 @@ class CI3_Model extends \CI_Model
     public function destroyAll()
     {
         try {
+            // CodeIgniter refuses a DELETE with no WHERE but allows an UPDATE with
+            // no WHERE, so a soft-delete model has no safety net of its own.
+            $this->_assertHasConditions('destroyAll');
 
-            $data = (clone $this)->withTrashed()->get();
+            // Bounded key sample for the response only; affected_rows() below is the
+            // real count. A full read here would hydrate every column and relation.
+            $sampleLimit = 1000;
 
-            if (!$data) {
+            $probe = clone $this;
+            $probe->eagerLoad = [];
+            $probe->aggregateRelations = [];
+            $probe->maxRows = 0; // bounded by limit() below, not by the row guard
+
+            $ids = array_column(
+                (array) $probe->withTrashed()->toArray()
+                    ->select($this->primaryKey)
+                    ->limit($sampleLimit)
+                    ->get(),
+                $this->primaryKey
+            );
+            unset($probe);
+
+            if (empty($ids)) {
                 throw new \Exception('Records not found');
             }
 
@@ -2022,6 +2157,9 @@ class CI3_Model extends \CI_Model
                 $success = $this->_database->delete($this->table);
             }
 
+            // Correct even when the key sample above was truncated.
+            $affected = (int) $this->_database->affected_rows();
+
             $this->resetQuery();
 
             if (!$success) {
@@ -2030,8 +2168,12 @@ class CI3_Model extends \CI_Model
 
             return [
                 'code' => 200,
-                'id' => array_column($data, $this->primaryKey),
-                'data' => $data,
+                'id' => $ids,
+                'data' => [
+                    'affected' => $affected,
+                    'ids' => $ids,
+                    'ids_truncated' => ($affected > count($ids)),
+                ],
                 'message' => 'Removed successfully',
                 'action' => 'delete'
             ];
@@ -2141,21 +2283,34 @@ class CI3_Model extends \CI_Model
             return $data;
         }
 
-        if (!empty($includeKey)) {
-            $this->fillable[] = $includeKey;
+        // Local copies - never mutate the model's own fillable/protected config.
+        $fillable = is_array($this->fillable) ? $this->fillable : [];
+        $protected = is_array($this->protected) ? $this->protected : [];
 
-            // Check if $includeKey exists in $this->protected
-            if (($key = array_search($includeKey, $this->protected)) !== false) {
-                unset($this->protected[$key]);
+        // An empty $fillable disables the allowlist rather than blocking everything,
+        // which is easy to mistake for a lock-down.
+        if ($fillable === [] && $protected === []) {
+            log_message(
+                'error',
+                "Mass assignment on `{$this->table}` is unrestricted: both \$fillable and \$protected are empty, "
+                    . 'so every submitted key is written. List the columns you allow in $fillable.'
+            );
+        }
+
+        if (!empty($includeKey)) {
+            $fillable[] = $includeKey;
+
+            if (($key = array_search($includeKey, $protected)) !== false) {
+                unset($protected[$key]);
             }
         }
 
-        if (!empty($this->fillable)) {
-            $data = array_intersect_key($data, array_flip($this->fillable));
+        if (!empty($fillable)) {
+            $data = array_intersect_key($data, array_flip($fillable));
         }
 
-        if (!empty($this->protected)) {
-            $data = array_diff_key($data, array_flip($this->protected));
+        if (!empty($protected)) {
+            $data = array_diff_key($data, array_flip($protected));
         }
 
         return $data;
@@ -2340,6 +2495,7 @@ class CI3_Model extends \CI_Model
     private function _set_connection()
     {
         $this->_database = $this->ci->load->database($this->connection, TRUE);
+        $this->db = $this->_database;
     }
 
     # HELPER SECTION
@@ -2406,7 +2562,7 @@ class CI3_Model extends \CI_Model
     private function _get_table_name($model_name)
     {
         // Load helper for string manipulation
-        $this->ci->helper('inflector');
+        $this->ci->load->helper('inflector'); // was $this->ci->helper() - CI_Controller has no such method (fatal)
 
         // Remove common suffixes and pluralize the model name
         return plural(preg_replace('/(_m|_model|_mdl|model)?$/', '', strtolower($model_name)));
@@ -2465,8 +2621,39 @@ class CI3_Model extends \CI_Model
             'returnType' => $this->returnType,
             '_paginateColumn' => $this->_paginateColumn ?? [],
             'index' => $this->_indexString ?? null,
-            'indexType' => $this->_indexType ?? 'USE INDEX'
+            'indexType' => $this->_indexType ?? 'USE INDEX',
+
+            // These must stay captured: resetQuery() clears them, and chunk()/cursor()
+            // run get() once per chunk. Without them, withTrashed()->chunk() would
+            // return trashed rows in the first chunk and drop them from the rest.
+            'trashed' => $this->_trashed,
+            'secureOutput' => $this->_secureOutput,
+            'secureOutputException' => $this->_secureOutputException ?? [],
+            'aggregateRelations' => $this->aggregateRelations ?? [],
         ];
+    }
+
+    /**
+     * Restore what _cloneDatabaseSettings() captured. Shared by chunk() and cursor()
+     * so they cannot drift apart.
+     */
+    private function _restoreDatabaseSettings(array $originalState)
+    {
+        $this->_database = clone $originalState['db'];
+
+        $this->connection = $originalState['connection'];
+        $this->table = $originalState['table'];
+        $this->primaryKey = $originalState['primaryKey'];
+        $this->relations = $originalState['relations'] ?? [];
+        $this->eagerLoad = $originalState['eagerLoad'] ?? [];
+        $this->aggregateRelations = $originalState['aggregateRelations'] ?? [];
+        $this->returnType = $originalState['returnType'];
+        $this->_paginateColumn = $originalState['_paginateColumn'] ?? [];
+        $this->_indexString = $originalState['index'] ?? null;
+        $this->_indexType = $originalState['indexType'] ?? 'USE INDEX';
+        $this->_trashed = $originalState['trashed'] ?? 'without';
+        $this->_secureOutput = $originalState['secureOutput'] ?? false;
+        $this->_secureOutputException = $originalState['secureOutputException'] ?? [];
     }
 
     /**
@@ -2485,14 +2672,21 @@ class CI3_Model extends \CI_Model
             $alias = trim($matches[2]);
         }
 
-        // Check if column already has dot (table.column format)
-        if (strpos($processedColumn, '.') === false) {
-            $processedColumn = "`{$this->table}`.`{$processedColumn}`";
-        } else {
-            // Already has table prefix, just add backticks if needed
-            $parts = explode('.', $processedColumn);
-            $processedColumn = "`{$parts[0]}`.`{$parts[1]}`";
+        // Validate before back-quoting. Wrapping an unchecked name in backticks is
+        // not escaping: a backtick inside the name closes the quote and the rest is
+        // executed as SQL.
+        $processedColumn = $this->validateIdentifier($processedColumn, 'date/time condition');
+        $bare = str_replace('`', '', $processedColumn);
+
+        if ($bare === '*') {
+            return ['*', $alias];
         }
+
+        $parts = strpos($bare, '.') === false
+            ? [$this->table, $bare]
+            : explode('.', $bare);
+
+        $processedColumn = '`' . implode('`.`', $parts) . '`';
 
         return [$processedColumn, $alias];
     }
@@ -2537,13 +2731,19 @@ class CI3_Model extends \CI_Model
         return $query->get_compiled_select();
     }
 
+    /**
+     * Enable this model's debug logging.
+     *
+     * @param int $level Ignored; kept so existing onDebug(E_ALL) calls still work.
+     * @return $this
+     */
     public function onDebug($level = E_ALL)
     {
+        // Logging only. Never call ini_set()/error_reporting() here: they are
+        // process-global, are never restored, and would expose SQL and file paths
+        // to users. Set display_errors in the environment instead.
         $this->debug = true;
 
-        ini_set('display_errors', 1);
-        ini_set('display_startup_errors', 1);
-        error_reporting($level);
         return $this;
     }
 
@@ -2582,6 +2782,128 @@ class CI3_Model extends \CI_Model
             default:
                 $this->_database->$method($column . $operator, $value);
         }
+    }
+
+    /**
+     * Allow the next mass write to run without conditions. destroyAll() and
+     * patchAll() refuse by default, because they would otherwise affect every row.
+     *
+     * @return $this
+     */
+    public function withoutConditions()
+    {
+        $this->_allowUnqualifiedWrite = true;
+        return $this;
+    }
+
+    /**
+     * Refuse a read whose row count exceeds $maxRows.
+     *
+     * Checked before result_array() converts the rows into PHP arrays, which is the
+     * allocation that actually exhausts memory - a PHP array row costs several times
+     * what the driver's own buffer holds. Disabled ($maxRows = 0) by default.
+     *
+     * @param object $query
+     * @return void
+     * @throws \RuntimeException
+     */
+    private function _assertWithinMaxRows($query)
+    {
+        if ($this->maxRows <= 0 || !is_object($query) || !method_exists($query, 'num_rows')) {
+            return;
+        }
+
+        $rows = (int) $query->num_rows();
+
+        if ($rows > $this->maxRows) {
+            if (method_exists($query, 'free_result')) {
+                $query->free_result();
+            }
+            $this->resetQuery();
+
+            throw new \RuntimeException(
+                "Query on `{$this->table}` returned {$rows} rows, over the maxRows limit of {$this->maxRows}. "
+                    . 'Add a limit(), or iterate with chunk()/cursor()/lazy() instead of get().'
+            );
+        }
+    }
+
+    /**
+     * Refuse a mass write that carries no conditions.
+     *
+     * @throws \RuntimeException
+     */
+    private function _assertHasConditions($method)
+    {
+        // One-shot. Models are request singletons, so a flag left set would disarm
+        // the guard for every later write.
+        if ($this->_allowUnqualifiedWrite) {
+            $this->_allowUnqualifiedWrite = false;
+            return;
+        }
+
+        $state = $this->getQueryBuilderState($this->_database, ['qb_where', 'qb_like']);
+
+        if (empty($state['qb_where'] ?? []) && empty($state['qb_like'] ?? [])) {
+            throw new \RuntimeException(
+                "{$method}() refused: no WHERE conditions were set, so this would affect every row in "
+                    . "`{$this->table}`. Add a condition, or call ->withoutConditions() if that is intended."
+            );
+        }
+    }
+
+    /**
+     * Validate a column identifier before it is interpolated into raw SQL.
+     *
+     * Single choke point for the methods that build SQL with escaping disabled -
+     * those escape their values but not their identifiers. Accepts `column`,
+     * `table.column` and `*`, optionally back-quoted.
+     *
+     * @throws \InvalidArgumentException
+     */
+    protected function validateIdentifier($column, $context = 'query')
+    {
+        if (!is_string($column) || $column === '') {
+            throw new \InvalidArgumentException("Invalid column name for {$context}: expected a non-empty string.");
+        }
+
+        $candidate = str_replace('`', '', trim($column));
+
+        if ($candidate === '*') {
+            return $column;
+        }
+
+        // Up to three segments (schema.table.column); each must be a bare identifier.
+        if (!preg_match('/^[A-Za-z_][A-Za-z0-9_$]*(\.[A-Za-z_][A-Za-z0-9_$]*){0,2}$/', $candidate)) {
+            throw new \InvalidArgumentException(
+                "Invalid column name for {$context}: '{$column}'. Expected 'column', 'table.column' "
+                    . "or 'schema.table.column'. Use selectRaw()/havingRaw() for expressions."
+            );
+        }
+
+        return $column;
+    }
+
+    /**
+     * Validate an operator against $allowedOperators.
+     *
+     * @throws \InvalidArgumentException
+     */
+    protected function validateOperator($operator, $context = 'query')
+    {
+        if (!is_string($operator)) {
+            throw new \InvalidArgumentException("Invalid operator for {$context}.");
+        }
+
+        $upper = strtoupper(trim($operator));
+
+        if (!in_array($upper, $this->allowedOperators, true)) {
+            throw new \InvalidArgumentException(
+                "Invalid operator for {$context}: '{$operator}'. Allowed: " . implode(', ', $this->allowedOperators) . '.'
+            );
+        }
+
+        return $upper;
     }
 
     private function validateDayMonth($value, $month = false)
@@ -2623,10 +2945,14 @@ class CI3_Model extends \CI_Model
     }
 
     /**
-     * Checks if an array is multidimensional.
+     * Is $data a batch of rows rather than a single row?
      *
-     * @param mixed $data The array to check.
-     * @return bool True if the array is multidimensional, false otherwise.
+     * A batch has integer keys and an array for every value. A single row has at
+     * least one string key, so a row containing a JSON or array column is not
+     * mistaken for a batch.
+     *
+     * @param mixed $data
+     * @return bool
      */
     private function _isMultidimensional($data)
     {
@@ -2634,13 +2960,13 @@ class CI3_Model extends \CI_Model
             return false;
         }
 
-        foreach ($data as $value) {
-            if (is_array($value)) {
-                return true;
+        foreach ($data as $key => $value) {
+            if (!is_int($key) || !is_array($value)) {
+                return false;
             }
         }
 
-        return false;
+        return true;
     }
 
     /**
@@ -2745,6 +3071,49 @@ class CI3_Model extends \CI_Model
     }
 
     /**
+     * Default CodeIgniter query-builder properties reached via reflection.
+     */
+    private const QB_PROPERTIES = [
+        'qb_select', 'qb_from', 'qb_join', 'qb_where', 'qb_orderby',
+        'qb_groupby', 'qb_having', 'qb_limit', 'qb_offset'
+    ];
+
+    /**
+     * ReflectionProperty handles for a DB instance, cached per class. Callers run
+     * this once per chunk inside a loop, so rebuilding it each time is costly.
+     *
+     * @return \ReflectionProperty[]
+     */
+    private function _reflectQueryBuilderProps($db, array $properties)
+    {
+        static $cache = [];
+
+        $class = get_class($db);
+        $key = $class . '|' . implode(',', $properties);
+
+        if (isset($cache[$key])) {
+            return $cache[$key];
+        }
+
+        $reflectedProps = [];
+        $current = $class;
+
+        while ($current) {
+            $reflection = new \ReflectionClass($current);
+            foreach ($properties as $prop) {
+                if (!isset($reflectedProps[$prop]) && $reflection->hasProperty($prop)) {
+                    $property = $reflection->getProperty($prop);
+                    $property->setAccessible(true);
+                    $reflectedProps[$prop] = $property;
+                }
+            }
+            $current = get_parent_class($current);
+        }
+
+        return $cache[$key] = $reflectedProps;
+    }
+
+    /**
      * Resets internal query builder state for a CodeIgniter 3 database instance.
      *
      * @param object $db         The DB instance (CI_DB_*_driver or subclass).
@@ -2753,58 +3122,20 @@ class CI3_Model extends \CI_Model
      */
     protected function resetQueryBuilderState(&$db, $properties = [])
     {
-        $defaultProperties = [
-            'qb_select', 'qb_from', 'qb_join', 'qb_where', 'qb_orderby',
-            'qb_groupby', 'qb_having', 'qb_limit', 'qb_offset'
-        ];
+        $properties = empty($properties) ? self::QB_PROPERTIES : $properties;
 
-        $properties = empty($properties) ? $defaultProperties : $properties;
-        $reflectedProps = [];
-
-        $class = get_class($db);
-        while ($class) {
-            $reflection = new \ReflectionClass($class);
-            foreach ($properties as $prop) {
-                if (!isset($reflectedProps[$prop]) && $reflection->hasProperty($prop)) {
-                    $property = $reflection->getProperty($prop);
-                    $property->setAccessible(true);
-                    $reflectedProps[$prop] = $property;
-                }
-            }
-            $class = get_parent_class($class);
-        }
-
-        foreach ($reflectedProps as $prop => $property) {
-            $resetValue = in_array($prop, ['qb_limit', 'qb_offset']) ? false : [];
+        foreach ($this->_reflectQueryBuilderProps($db, $properties) as $prop => $property) {
+            $resetValue = ($prop === 'qb_limit' || $prop === 'qb_offset') ? false : [];
             $property->setValue($db, $resetValue);
         }
     }
 
     protected function getQueryBuilderState($db, $properties = [])
     {
-        $defaultProperties = [
-            'qb_select', 'qb_from', 'qb_join', 'qb_where', 'qb_orderby',
-            'qb_groupby', 'qb_having', 'qb_limit', 'qb_offset'
-        ];
-
-        $properties = empty($properties) ? $defaultProperties : $properties;
-        $reflectedProps = [];
+        $properties = empty($properties) ? self::QB_PROPERTIES : $properties;
         $results = [];
 
-        $class = get_class($db);
-        while ($class) {
-            $reflection = new \ReflectionClass($class);
-            foreach ($properties as $prop) {
-                if (!isset($reflectedProps[$prop]) && $reflection->hasProperty($prop)) {
-                    $property = $reflection->getProperty($prop);
-                    $property->setAccessible(true);
-                    $reflectedProps[$prop] = $property;
-                }
-            }
-            $class = get_parent_class($class);
-        }
-
-        foreach ($reflectedProps as $prop => $property) {
+        foreach ($this->_reflectQueryBuilderProps($db, $properties) as $prop => $property) {
             $results[$prop] = $property->getValue($db);
         }
 
@@ -2849,7 +3180,9 @@ class CI3_Model extends \CI_Model
 
         switch ($this->returnType) {
             case 'object':
-                $resultFormat = json_decode(json_encode($this->_safeOutputSanitize($result)));
+                // Direct cast. A json_decode(json_encode()) round trip costs about
+                // 3x peak memory and loses non-UTF-8 bytes and ints above 2^53.
+                $resultFormat = $this->_toObjectRecursive($this->_safeOutputSanitize($result));
                 break;
             case 'json':
                 $resultFormat = json_encode($this->_safeOutputSanitize($result));
@@ -2858,22 +3191,70 @@ class CI3_Model extends \CI_Model
                 $resultFormat = $this->_safeOutputSanitize($result);
         }
 
-        $this->resetQuery();
+        // No resetQuery() here - get()/fetch() reset once after this returns.
         return $resultFormat;
     }
 
+    /**
+     * Convert an array structure to nested stdClass objects.
+     *
+     * Lists stay arrays, associative arrays become objects - matching what the
+     * json_decode(json_encode(...)) round trip this replaced produced.
+     */
+    private function _toObjectRecursive($value)
+    {
+        if (!is_array($value)) {
+            return $value;
+        }
+
+        // Keep [] an array. range(0, -1) returns [0, -1], so the is-list check
+        // below would misread [] as associative and turn an empty relation into {}.
+        if ($value === []) {
+            return $value;
+        }
+
+        $isList = array_keys($value) === range(0, count($value) - 1);
+
+        foreach ($value as $k => $v) {
+            if (is_array($v)) {
+                $value[$k] = $this->_toObjectRecursive($v);
+            }
+        }
+
+        return $isList ? $value : (object) $value;
+    }
+
+    /**
+     * Reset per-query state.
+     *
+     * Never re-connect here. Replacing the connection detaches any open transaction
+     * from the handle that started it, so commit()/rollback() would act on a
+     * different connection than begin(). Declared model configuration ($fillable,
+     * $hidden, $appends, validation rules) is not per-query, so it is left alone.
+     */
     private function resetQuery()
     {
-        $this->reset_connection();
-        $this->primaryKey = 'id';
+        if (isset($this->_database) && method_exists($this->_database, 'reset_query')) {
+            $this->_database->reset_query();
+        }
+
         $this->relations = [];
         $this->eagerLoad = [];
         $this->aggregateRelations = [];
         $this->returnType = 'array';
         $this->_paginateColumn = [];
+        $this->_paginateSearchValue = '';
         $this->_indexString = null;
         $this->_indexType = 'USE INDEX';
-        $this->_suggestIndexEnabled = false;
+        $this->_trashed = 'without';
+        $this->_secureOutput = false;
+        $this->_secureOutputException = [];
+        $this->_allowUnqualifiedWrite = false;
+
+        // Deliberately not reset: $_ignoreValidation, $_overrideValidation and
+        // $_validationCustomize. Those belong to a write, but this runs on reads too,
+        // and clearing them breaks skipValidation()->patchAll() - patchAll() chunks,
+        // and each chunk's read would clear the flag before the write callback runs.
     }
 
     # PERFORMANCE HELPER
@@ -2888,6 +3269,29 @@ class CI3_Model extends \CI_Model
     }
 
     /**
+     * Validate and join index names. getTableWithIndex() interpolates the result
+     * straight into the FROM clause.
+     *
+     * @throws \InvalidArgumentException
+     */
+    private function _normaliseIndexNames($indexName, $context)
+    {
+        $names = is_array($indexName) ? $indexName : [$indexName];
+        $clean = [];
+
+        foreach ($names as $name) {
+            if (!is_string($name) || !preg_match('/^[A-Za-z_][A-Za-z0-9_]*$/', trim($name))) {
+                throw new \InvalidArgumentException(
+                    "Invalid index name for {$context}: " . (is_string($name) ? "'{$name}'" : gettype($name)) . '.'
+                );
+            }
+            $clean[] = trim($name);
+        }
+
+        return implode(', ', $clean);
+    }
+
+    /**
      * Forces MySQL to use specific indexes for the query
      *
      * @param string|array $indexName Index name or array of index names
@@ -2899,7 +3303,7 @@ class CI3_Model extends \CI_Model
             return $this;
         }
 
-        $this->_indexString = is_array($indexName) ? implode(', ', $indexName) : $indexName;
+        $this->_indexString = $this->_normaliseIndexNames($indexName, 'forceIndex');
         $this->_indexType = 'FORCE INDEX';
         return $this;
     }
@@ -2916,7 +3320,7 @@ class CI3_Model extends \CI_Model
             return $this;
         }
 
-        $this->_indexString = is_array($indexName) ? implode(', ', $indexName) : $indexName;
+        $this->_indexString = $this->_normaliseIndexNames($indexName, 'useIndex');
         $this->_indexType = 'USE INDEX';
         return $this;
     }
@@ -2933,7 +3337,7 @@ class CI3_Model extends \CI_Model
             return $this;
         }
 
-        $this->_indexString = is_array($indexName) ? implode(', ', $indexName) : $indexName;
+        $this->_indexString = $this->_normaliseIndexNames($indexName, 'ignoreIndex');
         $this->_indexType = 'IGNORE INDEX';
         return $this;
     }
@@ -2948,8 +3352,13 @@ class CI3_Model extends \CI_Model
     public function suggestIndex($explain = true)
     {
         if (!$explain) {
-            // Just mark that we should log index suggestions after executing the query
-            $this->_suggestIndexEnabled = true;
+            // Deferred suggestion was never implemented. Log rather than throw so a
+            // long-standing no-op does not suddenly become fatal.
+            log_message(
+                'error',
+                'suggestIndex(false) does nothing: deferred index suggestion is not implemented. '
+                    . 'Call suggestIndex() with no argument to analyse the current query.'
+            );
             return $this;
         }
 
@@ -3086,6 +3495,15 @@ class CI3_Model extends \CI_Model
 
     private function isColumnIndexed($columnName, $tableName)
     {
+        // Cached per request: this is an INFORMATION_SCHEMA query, and callers run
+        // it once per chunk.
+        static $cache = [];
+        $cacheKey = $this->connection . '|' . $tableName . '|' . $columnName;
+
+        if (array_key_exists($cacheKey, $cache)) {
+            return $cache[$cacheKey];
+        }
+
         $query = $this->_database->query(
             "SELECT COUNT(1) as indexed 
                 FROM INFORMATION_SCHEMA.STATISTICS 
@@ -3099,11 +3517,15 @@ class CI3_Model extends \CI_Model
         $result = $query->row_array();
         $isIndexed = !empty($result) && $result['indexed'] > 0;
 
+        if (isset($query) && method_exists($query, 'free_result')) {
+            $query->free_result();
+        }
+
         if ($this->debug) {
             log_message('debug', "Index check for column `$columnName` on table `$tableName`: " . ($isIndexed ? "Indexed ✅" : "Not Indexed ❌"));
         }
 
-        return $isIndexed;
+        return $cache[$cacheKey] = $isIndexed;
     }
 
     # SECURITY HELPER
@@ -3196,7 +3618,7 @@ class CI3_Model extends \CI_Model
         // Recursively process nested arrays
         foreach ($data as $key => $value) {
             if (is_array($value)) {
-                $data[$key] = $this->removeHiddenDataRecursive($value, $this->hidden);
+                $data[$key] = $this->removeHiddenDataRecursive($value);
             }
         }
 
@@ -3271,23 +3693,58 @@ class CI3_Model extends \CI_Model
         $this->unsetAttributes();
     }
 
+    /**
+     * Expose a row's columns as properties for getXAttribute() accessors.
+     *
+     * Columns colliding with a declared property are skipped: setting them
+     * overwrote model config, and unset() then deleted the property outright.
+     *
+     * @param array $data
+     * @return void
+     */
     private function setAttributes($data)
     {
-        foreach ($this->fillable as $attribute) {
+        $this->_appendedAttributes = [];
+
+        foreach ((array) $this->fillable as $attribute) {
+            if (!is_string($attribute) || $attribute === '') {
+                continue;
+            }
+
+            if (property_exists($this, $attribute)) {
+                if ($this->debug) {
+                    log_message(
+                        'error',
+                        "Column `{$attribute}` on `{$this->table}` collides with a model property and is not "
+                            . 'exposed to accessors. Rename the column or the property if an accessor needs it.'
+                    );
+                }
+                continue;
+            }
+
             $this->$attribute = $data[$attribute] ?? null;
+            $this->_appendedAttributes[] = $attribute;
         }
     }
 
+    /**
+     * Remove only the properties setAttributes() created.
+     *
+     * @return void
+     */
     private function unsetAttributes()
     {
-        foreach ($this->fillable as $attribute) {
+        foreach ($this->_appendedAttributes as $attribute) {
             unset($this->$attribute);
         }
+
+        $this->_appendedAttributes = [];
     }
 
     public function __destruct()
     {
-        $this->resetQuery();
+        // Intentionally empty. Calling resetQuery() here opened a database
+        // connection during teardown.
     }
 
     /**
